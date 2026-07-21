@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  classifier:
+    build: ./classifier
+    ports:
+      - "8100:8100"
+    environment:
+      MCP_INSIGHT_API_KEY: ${MCP_INSIGHT_API_KEY:-dev-local-key}
+      DASHBOARD_ORIGINS: ${DASHBOARD_ORIGINS:-http://localhost:5173,http://localhost:4173}
+      RATE_LIMIT_CLASSIFY_PER_MINUTE: ${RATE_LIMIT_CLASSIFY_PER_MINUTE:-300}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ingestion:
+    build: ./ingestion
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: mcp_insight
+      MCP_INSIGHT_API_KEY: ${MCP_INSIGHT_API_KEY:-dev-local-key}
+      CLASSIFIER_URL: http://classifier:8100
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ALERT_SCORE_THRESHOLD: ${ALERT_SCORE_THRESHOLD:-60}
+      ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900}
+      DASHBOARD_ORIGINS: ${DASHBOARD_ORIGINS:-http://localhost:5173,http://localhost:4173}
+      RATE_LIMIT_INGEST_PER_MINUTE: ${RATE_LIMIT_INGEST_PER_MINUTE:-120}
+      RATE_LIMIT_READ_PER_MINUTE: ${RATE_LIMIT_READ_PER_MINUTE:-300}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      classifier:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_INGESTION_URL: ${DASHBOARD_INGESTION_URL:-http://localhost:8000}
+        VITE_CLASSIFIER_URL: ${DASHBOARD_CLASSIFIER_URL:-http://localhost:8100}
+    ports:
+      - "5173:80"
+    depends_on:
+      - ingestion
+      - classifier
+
+volumes:
+  mongo_data:

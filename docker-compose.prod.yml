@@ -1,0 +1,51 @@
+# Production overlay. Use alongside the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+#
+# Changes vs. the base (dev-shaped) file:
+# - Mongo's port is no longer published to the host -- only reachable from
+#   other containers on the compose network.
+# - restart: unless-stopped on every service, so a host reboot or crash
+#   recovers without manual intervention.
+# - Conservative CPU/memory limits so one runaway container can't starve
+#   the others on a shared host.
+# - Uvicorn workers>1 for ingestion/classifier (stateless HTTP layer; the
+#   in-memory rate limiter and alert cooldowns are per-process, so multiple
+#   workers means those limits are per-worker, not global -- acceptable at
+#   small scale, see README).
+version: "3.9"
+
+services:
+  mongo:
+    restart: unless-stopped
+    ports: !reset []
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  classifier:
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "2"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  ingestion:
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  dashboard:
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
