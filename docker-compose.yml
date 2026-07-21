@@ -21,6 +21,7 @@ services:
       MCP_INSIGHT_API_KEY: ${MCP_INSIGHT_API_KEY:-dev-local-key}
       DASHBOARD_ORIGINS: ${DASHBOARD_ORIGINS:-http://localhost:5173,http://localhost:4173}
       RATE_LIMIT_CLASSIFY_PER_MINUTE: ${RATE_LIMIT_CLASSIFY_PER_MINUTE:-300}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/')"]
       interval: 10s
@@ -42,6 +43,9 @@ services:
       DASHBOARD_ORIGINS: ${DASHBOARD_ORIGINS:-http://localhost:5173,http://localhost:4173}
       RATE_LIMIT_INGEST_PER_MINUTE: ${RATE_LIMIT_INGEST_PER_MINUTE:-120}
       RATE_LIMIT_READ_PER_MINUTE: ${RATE_LIMIT_READ_PER_MINUTE:-300}
+      ANOMALY_ZSCORE_THRESHOLD: ${ANOMALY_ZSCORE_THRESHOLD:-3.0}
+      ANOMALY_HISTORY_BUCKETS: ${ANOMALY_HISTORY_BUCKETS:-8}
+      ANOMALY_MIN_HISTORY_BUCKETS: ${ANOMALY_MIN_HISTORY_BUCKETS:-3}
     depends_on:
       mongo:
         condition: service_healthy

@@ -29,16 +29,17 @@ mcp-insight/
       metrics_prom.py          Prometheus /metrics self-observability
       classifier_client.py   auto-classifies fault events against the taxonomy
       health_scoring.py      weighted 0-100 health score engine
-      anomaly.py              window-over-window anomaly/trend detector
-      alerting.py              Slack webhook alerts with persisted cooldowns
-      routes/events.py, routes/health.py, routes/keys.py
+      anomaly.py              rolling z-score anomaly/trend detector + bucketed timeseries
+      alerting.py              Slack webhook alerts, persisted cooldowns, history, mute
+      routes/events.py, routes/health.py, routes/keys.py, routes/alerts.py
     tests/               pytest unit/integration tests
-  classifier/            FastAPI service, TF-IDF match against the 27-category
-                          real MCP fault taxonomy (auth-protected, same API key,
-                          per-IP rate limited)
+  classifier/            FastAPI service, TF-IDF + optional LLM fallback match
+                          against the 27-category real MCP fault taxonomy
+                          (auth-protected, same API key, per-IP rate limited)
     tests/
   dashboard/             React + Vite SPA: servers list, per-server health/
-                          events/anomalies, taxonomy reference, settings
+                          trend charts/anomalies/alert history/key mgmt,
+                          taxonomy reference + cross-server drill-down, settings
   deploy/
     demo_flaky_server.py   test MCP server with a baked-in ~20% silent-failure rate
     drive_demo.py            sends realistic traffic against the demo server
@@ -146,17 +147,26 @@ curl -X POST http://localhost:8100/v1/classify \
 ```
 
 Returns the best-matching real fault subcategory, its practitioner-confirmed
-frequency, and its dominant severity/effort from the source study.
+frequency, and its dominant severity/effort from the source study. If TF-IDF
+confidence is below `LOW_CONFIDENCE_THRESHOLD` (0.15), the classifier also
+tries an LLM fallback (Claude) and, if it succeeds, puts that pick first in
+`results` with `"source": "llm"` (`confidence: null` -- LLM picks aren't
+scored the same way). Set `ANTHROPIC_API_KEY` to enable this; without it,
+low-confidence queries just keep the best TF-IDF guess (`source: "tfidf"`).
 
 ## 6. Alerting
 
 Set `SLACK_WEBHOOK_URL` in `.env` to an incoming webhook URL and restart
 `ingestion`. Alerts fire when:
 - A server's health score drops below `ALERT_SCORE_THRESHOLD` (default 60).
-- An anomaly (error-rate or latency spike vs. the previous window) is detected.
+- An anomaly (error-rate or p95-latency spike, statistically -- see below) is detected.
 
 Each alert kind has a per-server cooldown (`ALERT_COOLDOWN_SECONDS`, default
-15 minutes) persisted in Mongo, so restarts don't cause alert storms.
+15 minutes) persisted in Mongo, so restarts don't cause alert storms. Every
+sent alert is also logged to Mongo and visible on the dashboard's server
+detail page (or `GET /v1/servers/{id}/alerts`), which also has a mute
+control (`POST/DELETE /v1/servers/{id}/mute`) to silence a noisy server
+for N minutes without touching the threshold config.
 
 ## 7. Per-server API keys
 
@@ -212,6 +222,17 @@ host (reachable only from other containers on the compose network),
 `restart: unless-stopped` on every service, conservative CPU/memory
 limits, and 2 uvicorn workers each for ingestion/classifier.
 
+## 11. Dashboard: trends, drill-down, key management
+
+- **Server detail page** now shows a trend chart (error rate + p95 latency
+  over the last ~6h, 15-minute buckets, via `GET /v1/servers/{id}/timeseries`),
+  the anomaly panel (z-score based), alert history with a mute control, and
+  a per-server API key panel (mint/rotate/revoke inline, no curl needed).
+- **Taxonomy reference page** rows are now clickable -- each links to
+  `GET /v1/events/by-classification`, a cross-server view of every live
+  event classified into that subcategory, most recent first, linking back
+  to the originating server.
+
 ## Running tests
 
 Each service has its own virtualenv and test suite:
@@ -243,9 +264,13 @@ cd ingestion  && python -m venv .venv && .venv/bin/pip install -r requirements-d
 - **Health scoring is a transparent weighted formula**, not a black box --
   see `ingestion/app/health_scoring.py` for the exact weights and
   `health_breakdown` in the `/health` response for the per-factor penalty.
-- **Anomaly detection compares equal-length adjacent windows** (default:
-  last 15 minutes vs. the 15 minutes before that), flagging ratio-based
-  spikes in error rate or p95 latency -- see `ingestion/app/anomaly.py`.
+- **Anomaly detection is a rolling z-score**, not a fixed ratio. It buckets
+  the last `ANOMALY_HISTORY_BUCKETS + 1` windows (default 8+1, 15 min
+  each = ~2.25h), treats the most recent as "current" and the rest as
+  history, and flags current as anomalous if it's `ANOMALY_ZSCORE_THRESHOLD`
+  (default 3.0) standard deviations from the historical mean -- adapts to
+  each server's own normal variance instead of one fixed multiplier for
+  every server. See `ingestion/app/anomaly.py`.
 
 ## What's NOT in this build
 
@@ -260,15 +285,20 @@ cd ingestion  && python -m venv .venv && .venv/bin/pip install -r requirements-d
 - **Optional SDK hook** -- the opt-in decorator layer from the architecture
   doc (deeper internal traces for servers willing to add one import) isn't
   built; only interception-based capture exists.
-- **Learned anomaly detection** -- the anomaly detector is a ratio-based
-  heuristic over adjacent windows, not a statistical/ML model.
+- **ML-based anomaly detection** -- z-score against rolling history is
+  statistical, not a trained model (no seasonality awareness, e.g. daily
+  traffic cycles).
 - **Distributed rate limiting** -- the limiter is in-memory per-process;
   running multiple ingestion replicas or workers means the limit is
   per-worker, not a true global cap. Move to a shared store (Redis) if you
   need one.
-- **Dashboard views for keys/alerts/metrics** -- key minting, Prometheus
-  metrics, and rate-limit status are API/curl-only right now, not
-  surfaced in the React dashboard yet.
+- **Dashboard views for Prometheus metrics / rate-limit status** -- key
+  minting, alert history, and trend charts are now in the dashboard (see
+  section 11); raw `/metrics` output and current rate-limit usage are
+  still curl-only.
+- **Cross-server comparison table** -- the servers list shows each
+  server's headline metrics, but there's no dedicated side-by-side
+  comparison/sort view yet.
 
 ## Honest state of this code
 
@@ -316,3 +346,46 @@ the individual steps were run locally, but the workflow itself hasn't
 executed in Actions); no secrets-manager integration (still plain env
 vars); no TLS/reverse-proxy termination is included (add your own, e.g.
 Caddy or an ALB, in front of the prod overlay).
+
+### Stage 2, Phase B (smarter intelligence layer)
+
+Rewrote anomaly detection from a fixed ratio-vs-previous-window heuristic
+to a rolling z-score against historical buckets, and added an optional
+LLM fallback classifier. Both validated against the live stack: confirmed
+the classifier degrades cleanly to `source: "tfidf"` with no
+`ANTHROPIC_API_KEY` set, confirmed the `/anomalies` endpoint returns the
+new bucketed shape, and re-ran the flaky-server demo end-to-end (41/41
+events still captured correctly) to confirm nothing in the ingest path
+regressed. One real bug caught by the z-score history-bucketing logic
+itself during test-writing (not in production behavior, but the same
+code path both use): a doc timestamped fractionally ahead of `now` (clock
+skew) could compute a negative bucket index and crash with `IndexError`
+-- now clamped to the current bucket. 37 ingestion + 13 classifier tests
+pass (ingestion unchanged in count -- anomaly tests were rewritten in
+place; classifier up from 8).
+
+Not yet done for Phase B: real embeddings (Bedrock/OpenAI) + vector
+search -- still TF-IDF as the primary path, LLM fallback only kicks in
+below the confidence threshold and isn't a full replacement; no
+seasonality/trend-aware anomaly model.
+
+### Stage 2, Phase C (dashboard depth)
+
+Added a bucketed timeseries endpoint (shared bucketing code with anomaly
+detection -- `anomaly.bucket_history`), alert history + mute persisted in
+Mongo, and a cross-server classification drill-down endpoint; wired all
+three into the dashboard (trend charts, alert panel, taxonomy row
+click-through) plus inline per-server key mint/revoke. Validated live:
+hit `/timeseries`, `/mute` (POST+DELETE), `/alerts`, and
+`/events/by-classification` directly against the running stack and got
+real bucketed data / a real classified fault back; confirmed the
+dashboard serves the new `/taxonomy/:category/:subcategory` SPA route
+(200, not a 404 from client-side routing). 44 ingestion tests pass (up
+from 37) covering the new bucketing helper and mute/cooldown/history
+logic in `alerting.py`; no new backend logic was added to the classifier
+in this phase, so its test count is unchanged.
+
+Not yet done for Phase C: no dedicated cross-server comparison table
+(sortable side-by-side view) -- the servers list already shows per-server
+headline metrics but isn't literally a comparison UI; `/metrics` and
+current rate-limit usage still have no dashboard view, curl only.

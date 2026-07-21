@@ -49,6 +49,18 @@ async def _cooldown_ok(server_id: str, alert_kind: str) -> bool:
     return True
 
 
+async def _is_muted(server_id: str) -> bool:
+    db = get_db()
+    server = await db["servers"].find_one({"server_id": server_id})
+    muted_until = (server or {}).get("alerts_muted_until")
+    return bool(muted_until and muted_until > time.time())
+
+
+async def _record_alert(server_id: str, kind: str, text: str) -> None:
+    db = get_db()
+    await db["alerts"].insert_one({"server_id": server_id, "kind": kind, "text": text, "sent_at": time.time()})
+
+
 async def _send_slack(text: str, blocks: list[dict] | None = None) -> None:
     if not settings.slack_webhook_url:
         return
@@ -65,6 +77,8 @@ async def _send_slack(text: str, blocks: list[dict] | None = None) -> None:
 async def maybe_alert_health(server_id: str, health: dict) -> None:
     if health["score"] >= settings.alert_score_threshold:
         return
+    if await _is_muted(server_id):
+        return
     if not await _cooldown_ok(server_id, "health_score"):
         return
 
@@ -74,12 +88,15 @@ async def maybe_alert_health(server_id: str, health: dict) -> None:
         f"*{health['status']}* (score {health['score']}/100)\n{breakdown_lines}"
     )
     ALERTS_SENT.labels(kind="health_score").inc()
+    await _record_alert(server_id, "health_score", text)
     await _send_slack(text)
 
 
 async def maybe_alert_anomalies(server_id: str, anomaly_report: dict) -> None:
     anomalies = anomaly_report.get("anomalies") or []
     if not anomalies:
+        return
+    if await _is_muted(server_id):
         return
     if not await _cooldown_ok(server_id, "anomaly"):
         return
@@ -96,4 +113,5 @@ async def maybe_alert_anomalies(server_id: str, anomaly_report: dict) -> None:
             )
     text = f":warning: *mcp-insight*: anomaly detected on server `{server_id}`\n" + "\n".join(lines)
     ALERTS_SENT.labels(kind="anomaly").inc()
+    await _record_alert(server_id, "anomaly", text)
     await _send_slack(text)

@@ -56,6 +56,29 @@ export const ingestionApi = {
       getSettings().ingestionUrl,
       `/v1/servers/${encodeURIComponent(serverId)}/events?limit=${limit}&only_faults=${onlyFaults}`
     ),
+  getTimeseries: (serverId, windowMinutes = 15, buckets = 24) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/servers/${encodeURIComponent(serverId)}/timeseries?window_minutes=${windowMinutes}&buckets=${buckets}`
+    ),
+  getAlertHistory: (serverId, limit = 20) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/alerts?limit=${limit}`),
+  muteAlerts: (serverId, minutes) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/mute`, {
+      method: "POST",
+      body: JSON.stringify({ minutes }),
+    }),
+  unmuteAlerts: (serverId) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/mute`, { method: "DELETE" }),
+  mintKey: (serverId) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/keys`, { method: "POST" }),
+  revokeKey: (serverId) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/keys`, { method: "DELETE" }),
+  getEventsByClassification: (category, subcategory, limit = 50) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/events/by-classification?category=${encodeURIComponent(category)}&subcategory=${encodeURIComponent(subcategory)}&limit=${limit}`
+    ),
 };
 
 export const classifierApi = {

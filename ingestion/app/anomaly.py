@@ -52,14 +52,15 @@ def _zscore(value: float, history: list[float]) -> float | None:
     return (value - mean) / stddev
 
 
-async def detect_anomalies(server_id: str, window_minutes: int) -> dict:
-    """Buckets the last `settings.anomaly_history_buckets + 1` windows of
-    `window_minutes` each, treats the most recent as "current" and the
-    rest as history, and z-scores current against that history."""
+async def bucket_history(server_id: str, window_minutes: int, n_buckets: int) -> list[dict]:
+    """Splits the last `n_buckets` windows of `window_minutes` each into
+    per-bucket stats, oldest first, each carrying its own `bucket_start`
+    timestamp -- the shared primitive behind both anomaly detection
+    (z-scores the last bucket against the rest) and the timeseries chart
+    endpoint (just returns all of them)."""
     db = get_db()
     now = time.time()
     window_s = window_minutes * 60
-    n_buckets = settings.anomaly_history_buckets + 1
     lookback_start = now - window_s * n_buckets
 
     cursor = db["events"].find(
@@ -77,7 +78,21 @@ async def detect_anomalies(server_id: str, window_minutes: int) -> dict:
         idx = n_buckets - 1 - bucket_offset
         buckets[idx].append(doc)
 
-    bucket_stats = [_bucket_stats(b) for b in buckets]
+    stats = []
+    for i, b in enumerate(buckets):
+        age_offset = n_buckets - 1 - i
+        s = _bucket_stats(b)
+        s["bucket_start"] = now - (age_offset + 1) * window_s
+        stats.append(s)
+    return stats
+
+
+async def detect_anomalies(server_id: str, window_minutes: int) -> dict:
+    """Buckets the last `settings.anomaly_history_buckets + 1` windows of
+    `window_minutes` each, treats the most recent as "current" and the
+    rest as history, and z-scores current against that history."""
+    n_buckets = settings.anomaly_history_buckets + 1
+    bucket_stats = await bucket_history(server_id, window_minutes, n_buckets)
     current = bucket_stats[-1]
     history = bucket_stats[:-1]
     history_with_data = [b for b in history if b["total_calls"] > 0]

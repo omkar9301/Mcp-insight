@@ -4,6 +4,7 @@ import ServerList from "./components/ServerList.jsx";
 import ServerDetail from "./components/ServerDetail.jsx";
 import Settings from "./components/Settings.jsx";
 import Taxonomy from "./components/Taxonomy.jsx";
+import TaxonomyDrilldown from "./components/TaxonomyDrilldown.jsx";
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/" element={<ServerList />} />
           <Route path="/servers/:serverId" element={<ServerDetail />} />
           <Route path="/taxonomy" element={<Taxonomy />} />
+          <Route path="/taxonomy/:category/:subcategory" element={<TaxonomyDrilldown />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>

@@ -26,6 +26,7 @@ async def ensure_indexes() -> None:
     events = db["events"]
     await events.create_index([("server_id", 1), ("ts", -1)])
     await events.create_index([("server_id", 1), ("type", 1), ("ts", -1)])
+    await events.create_index([("classification.category", 1), ("classification.subcategory", 1), ("ts", -1)])
     await events.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 30)  # 30-day default retention
 
     servers = db["servers"]
@@ -33,3 +34,6 @@ async def ensure_indexes() -> None:
 
     alert_cooldowns = db["alert_cooldowns"]
     await alert_cooldowns.create_index([("server_id", 1), ("alert_kind", 1)], unique=True)
+
+    alerts = db["alerts"]
+    await alerts.create_index([("server_id", 1), ("sent_at", -1)])

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { classifierApi } from "../api.js";
 
 export default function Taxonomy() {
   const [taxonomy, setTaxonomy] = useState(null);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     classifierApi
@@ -21,7 +23,7 @@ export default function Taxonomy() {
       <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
         27 subcategories sourced from Owotogbe et al. (2026), "A Taxonomy of Runtime Faults in Model Context
         Protocol Servers" — 837 confirmed fault threads across 473 real MCP repos, validated by 55 real MCP
-        developers.
+        developers. Click a row to see live matching events across all servers.
       </p>
       <table>
         <thead>
@@ -35,7 +37,11 @@ export default function Taxonomy() {
         </thead>
         <tbody>
           {taxonomy.map((row, i) => (
-            <tr key={i}>
+            <tr
+              key={i}
+              style={{ cursor: "pointer" }}
+              onClick={() => navigate(`/taxonomy/${encodeURIComponent(row.category)}/${encodeURIComponent(row.subcategory)}`)}
+            >
               <td>{row.category}</td>
               <td>{row.subcategory}</td>
               <td>{row.confirmed_pct != null ? `${row.confirmed_pct}%` : "—"}</td>

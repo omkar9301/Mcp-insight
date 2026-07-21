@@ -4,7 +4,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..anomaly import detect_anomalies
+from ..anomaly import bucket_history, detect_anomalies
 from ..auth import require_api_key
 from ..db import get_db
 from ..health_scoring import compute_health_score
@@ -87,6 +87,7 @@ async def get_health(server_id: str, window_minutes: int = Query(60, ge=1, le=14
         "health_breakdown": health["breakdown"],
         "dropped_events_total": server.get("dropped_events_total", 0),
         "last_seen": server.get("last_seen"),
+        "alerts_muted_until": server.get("alerts_muted_until"),
     }
 
 
@@ -97,6 +98,22 @@ async def get_anomalies(server_id: str, window_minutes: int = Query(15, ge=1, le
     if server is None:
         raise HTTPException(status_code=404, detail="Unknown server_id -- no events received yet")
     return await detect_anomalies(server_id, window_minutes=window_minutes)
+
+
+@router.get("/v1/servers/{server_id}/timeseries")
+async def get_timeseries(
+    server_id: str,
+    window_minutes: int = Query(15, ge=1, le=180),
+    buckets: int = Query(24, ge=2, le=200),
+):
+    """Bucketed history for charting -- health-relevant stats (calls,
+    error rate, p95 latency) per equal-length window, oldest first."""
+    db = get_db()
+    server = await db["servers"].find_one({"server_id": server_id})
+    if server is None:
+        raise HTTPException(status_code=404, detail="Unknown server_id -- no events received yet")
+    stats = await bucket_history(server_id, window_minutes, buckets)
+    return {"server_id": server_id, "window_minutes": window_minutes, "buckets": stats}
 
 
 @router.get("/v1/servers")
@@ -118,3 +135,19 @@ async def recent_events(server_id: str, limit: int = Query(50, ge=1, le=500), on
     cursor = db["events"].find(query, {"_id": 0}).sort("ts", -1).limit(limit)
     events = [doc async for doc in cursor]
     return {"events": events}
+
+
+@router.get("/v1/events/by-classification")
+async def events_by_classification(
+    category: str = Query(...),
+    subcategory: str = Query(...),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Cross-server drill-down: every stored fault event classified into
+    this taxonomy subcategory, most recent first -- what the taxonomy
+    reference view links out to."""
+    db = get_db()
+    query = {"classification.category": category, "classification.subcategory": subcategory}
+    cursor = db["events"].find(query, {"_id": 0}).sort("ts", -1).limit(limit)
+    events = [doc async for doc in cursor]
+    return {"category": category, "subcategory": subcategory, "events": events}
