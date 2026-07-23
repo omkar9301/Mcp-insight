@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { classifierApi } from "../api.js";
 
 export default function Taxonomy() {
@@ -37,13 +37,18 @@ export default function Taxonomy() {
         </thead>
         <tbody>
           {taxonomy.map((row, i) => (
-            <tr
-              key={i}
-              style={{ cursor: "pointer" }}
-              onClick={() => navigate(`/taxonomy/${encodeURIComponent(row.category)}/${encodeURIComponent(row.subcategory)}`)}
-            >
-              <td>{row.category}</td>
-              <td>{row.subcategory}</td>
+            <tr key={i}>
+              <td>
+                <Link to={`/category/${encodeURIComponent(row.category)}`} onClick={(e) => e.stopPropagation()}>
+                  {row.category}
+                </Link>
+              </td>
+              <td
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/taxonomy/${encodeURIComponent(row.category)}/${encodeURIComponent(row.subcategory)}`)}
+              >
+                {row.subcategory}
+              </td>
               <td>{row.confirmed_pct != null ? `${row.confirmed_pct}%` : "—"}</td>
               <td>{dominant(row.severity)}</td>
               <td>{dominant(row.effort)}</td>

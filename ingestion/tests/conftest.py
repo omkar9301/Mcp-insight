@@ -53,15 +53,16 @@ class WritableCollection:
     async def insert_one(self, doc: dict) -> None:
         self._docs.append(dict(doc))
 
-    async def update_one(self, query: dict, update: dict, upsert: bool = False) -> None:
+    async def update_one(self, query: dict, update: dict, upsert: bool = False) -> "_UpdateResult":
         doc = None
         for d in self._docs:
             if _matches(d, query):
                 doc = d
                 break
+        matched = doc is not None
         if doc is None:
             if not upsert:
-                return
+                return _UpdateResult(matched_count=0)
             doc = dict(query)
             self._docs.append(doc)
         if "$set" in update:
@@ -69,6 +70,12 @@ class WritableCollection:
         if "$unset" in update:
             for k in update["$unset"]:
                 doc.pop(k, None)
+        return _UpdateResult(matched_count=1 if matched else 0)
+
+
+class _UpdateResult:
+    def __init__(self, matched_count: int) -> None:
+        self.matched_count = matched_count
 
 
 class WritableFakeDB:
@@ -81,13 +88,24 @@ class WritableFakeDB:
         return self._collections[name]
 
 
+def _get_path(doc: dict, dotted_key: str):
+    val = doc
+    for part in dotted_key.split("."):
+        if not isinstance(val, dict) or part not in val:
+            return None
+        val = val[part]
+    return val
+
+
 def _matches(doc: dict, query: dict) -> bool:
     for key, cond in query.items():
-        val = doc.get(key)
+        val = _get_path(doc, key)
         if isinstance(cond, dict):
             if "$gte" in cond and not (val is not None and val >= cond["$gte"]):
                 return False
             if "$lt" in cond and not (val is not None and val < cond["$lt"]):
+                return False
+            if "$exists" in cond and (val is not None) != cond["$exists"]:
                 return False
         else:
             if val != cond:

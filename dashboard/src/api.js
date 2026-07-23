@@ -79,6 +79,21 @@ export const ingestionApi = {
       getSettings().ingestionUrl,
       `/v1/events/by-classification?category=${encodeURIComponent(category)}&subcategory=${encodeURIComponent(subcategory)}&limit=${limit}`
     ),
+  getEventsBySeverity: (severity, limit = 50) =>
+    request(getSettings().ingestionUrl, `/v1/events/by-severity?severity=${encodeURIComponent(severity)}&limit=${limit}`),
+  getCategoryCounts: (windowMinutes = 1440) =>
+    request(getSettings().ingestionUrl, `/v1/stats/category-counts?window_minutes=${windowMinutes}`),
+  getSeverityBreakdown: (windowMinutes = 1440) =>
+    request(getSettings().ingestionUrl, `/v1/stats/severity-breakdown?window_minutes=${windowMinutes}`),
+  getHealthDistribution: () => request(getSettings().ingestionUrl, "/v1/stats/health-distribution"),
+  getHeatmap: (serverId, hours = 168) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/heatmap?hours=${hours}`),
+  getClassificationAccuracy: () => request(getSettings().ingestionUrl, "/v1/stats/classification-accuracy"),
+  submitFeedback: (serverId, ts, correct, note) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/events/${ts}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ correct, note }),
+    }),
 };
 
 export const classifierApi = {

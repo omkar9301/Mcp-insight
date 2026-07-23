@@ -31,15 +31,17 @@ mcp-insight/
       health_scoring.py      weighted 0-100 health score engine
       anomaly.py              rolling z-score anomaly/trend detector + bucketed timeseries
       alerting.py              Slack webhook alerts, persisted cooldowns, history, mute
-      routes/events.py, routes/health.py, routes/keys.py, routes/alerts.py
+      routes/events.py, routes/health.py, routes/keys.py, routes/alerts.py,
+      routes/stats.py (aggregate rollups), routes/feedback.py (classification feedback)
     tests/               pytest unit/integration tests
   classifier/            FastAPI service, TF-IDF + optional LLM fallback match
                           against the 27-category real MCP fault taxonomy
                           (auth-protected, same API key, per-IP rate limited)
     tests/
-  dashboard/             React + Vite SPA: servers list, per-server health/
-                          trend charts/anomalies/alert history/key mgmt,
-                          taxonomy reference + cross-server drill-down, settings
+  dashboard/             React + Vite SPA:
+                          components/charts/  BarChart, DonutChart, StackedBar, Heatmap (no deps)
+                          Overview (KPIs+charts), ServerDetail (trend/heatmap/alerts/keys/feedback),
+                          Taxonomy + CategoryPage + TaxonomyDrilldown, SeverityPage, Settings
   deploy/
     demo_flaky_server.py   test MCP server with a baked-in ~20% silent-failure rate
     drive_demo.py            sends realistic traffic against the demo server
@@ -233,6 +235,40 @@ limits, and 2 uvicorn workers each for ingestion/classifier.
   event classified into that subcategory, most recent first, linking back
   to the originating server.
 
+## 12. Overview page, charts, category/severity views, classification feedback
+
+- **Overview page** (`/`, now the default landing view) shows fleet-wide
+  KPIs above the servers list: server count, average health score, total
+  60-minute call volume, a health-status donut (healthy/degraded/
+  unhealthy/critical across every server), a severity stacked bar, and a
+  bar chart of the top fault subcategories in the last 24h -- all backed
+  by new aggregate endpoints (`GET /v1/stats/health-distribution`,
+  `/v1/stats/severity-breakdown`, `/v1/stats/category-counts`).
+- **Category pages** (`/category/{category}`) roll up all subcategories
+  within one taxonomy category -- e.g. every "Tool" fault subcategory
+  together with a bar chart of relative volume -- linking into the
+  existing per-subcategory drill-down.
+- **Severity pages** (`/severity/{minor|major|critical}`) show every fault
+  event at that severity across all servers, via
+  `GET /v1/events/by-severity`.
+- **Error-rate heatmap** on the server detail page groups the last 7 days
+  by hour-of-day (UTC) to surface recurring bad windows (`GET
+  /v1/servers/{id}/heatmap`).
+- **Classification feedback loop**: thumbs up/down on any classified
+  fault in the events table (`POST
+  /v1/servers/{id}/events/{ts}/feedback`), rolled up per subcategory via
+  `GET /v1/stats/classification-accuracy` -- lets you see where the
+  classifier is actually right or wrong over time, not just trust it
+  blindly.
+- **Explanations**: an info-icon (`InfoTooltip`) next to every
+  non-obvious metric (error rate, silent failures, p95 latency, CPU,
+  dropped events, health score breakdown, anomaly detection, heatmap) --
+  click to see what it measures and why it matters, without leaving the
+  page.
+- All new charts (`BarChart`, `DonutChart`, `StackedBar`, `Heatmap`) are
+  dependency-free -- plain SVG/DOM, no charting library added, keeping the
+  dashboard's bundle small (~62KB gzipped total).
+
 ## Running tests
 
 Each service has its own virtualenv and test suite:
@@ -389,3 +425,34 @@ Not yet done for Phase C: no dedicated cross-server comparison table
 (sortable side-by-side view) -- the servers list already shows per-server
 headline metrics but isn't literally a comparison UI; `/metrics` and
 current rate-limit usage still have no dashboard view, curl only.
+
+### Stage 2, Phase D (visualization, category/severity pages, classification feedback)
+
+Added five new aggregate stats endpoints, a feedback loop for
+classification accuracy, four dependency-free chart components, and three
+new dashboard pages (Overview KPIs, category rollup, severity
+cross-server view). Validated live end-to-end: drove a fresh demo run,
+then hit `/stats/category-counts`, `/stats/severity-breakdown`,
+`/servers/{id}/heatmap`, and `/events/by-severity` directly and got real
+computed data back (not empty stubs); submitted feedback on a real
+classified event and confirmed `/stats/classification-accuracy` correctly
+rolled it up (1/1 = 100%); confirmed all three new SPA routes
+(`/`, `/category/Tool`, `/severity/major`) serve 200. `npm run build`
+passes cleanly (~62KB gzipped, no new npm dependencies added for
+charting). 53 ingestion tests pass (up from 44); no classifier logic
+changed in this phase, so its count is unchanged.
+
+One operational note, not a code bug: `.env`'s `MCP_INSIGHT_API_KEY` was
+found rotated to a different value outside of any change made in this
+session, twice across this project's history now (once with a live Slack
+webhook URL alongside it). Neither the codebase nor anything built in
+these sessions writes to `.env` automatically -- if you don't recognize a
+value change there, treat it as needing investigation on your end, not as
+this system's behavior.
+
+Not yet done for Phase D: no dedicated cross-server comparison table
+still; multi-label classification (a fault spanning >1 subcategory) not
+implemented; blended TF-IDF+LLM confidence scoring wasn't built as a
+single unified number -- the LLM pick is prepended as a separate
+`source: "llm"` result alongside the TF-IDF ones, not merged into one
+score.

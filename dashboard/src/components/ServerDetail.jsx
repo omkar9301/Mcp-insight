@@ -3,11 +3,24 @@ import { useParams, Link } from "react-router-dom";
 import { ingestionApi } from "../api.js";
 import HealthBadge from "./HealthBadge.jsx";
 import Sparkline from "./Sparkline.jsx";
+import InfoTooltip from "./InfoTooltip.jsx";
+import Heatmap from "./charts/Heatmap.jsx";
 
-function StatTile({ label, value }) {
+const METRIC_HELP = {
+  errorRate: "Fraction of tool/method calls that returned a JSON-RPC error object in the window.",
+  silentFailures: "Calls that reported JSON-RPC success but the result violated the tool's own declared output schema -- the flagship signal this platform exists to catch.",
+  p95: "95% of calls in this window finished faster than this. Better than an average for spotting user-perceived slowness, since it isn't skewed down by many fast calls hiding a slow tail.",
+  cpu: "Average CPU utilization of the wrapped server process, sampled every 5s by the process metrics sidecar.",
+  dropped: "Events the wrapper's local buffer dropped because the ingestion API was unreachable or slow -- fail-open by design, but a nonzero count means some observability data was lost.",
+};
+
+function StatTile({ label, value, help }) {
   return (
     <div className="stat-tile">
-      <div className="label">{label}</div>
+      <div className="label">
+        {label}
+        {help && <InfoTooltip text={help} />}
+      </div>
       <div className="value">{value}</div>
     </div>
   );
@@ -30,22 +43,35 @@ export default function ServerDetail() {
   const [error, setError] = useState(null);
   const [keyResult, setKeyResult] = useState(null);
   const [muteMinutes, setMuteMinutes] = useState(60);
+  const [heatmap, setHeatmap] = useState(null);
+  const [feedbackGiven, setFeedbackGiven] = useState({});
 
   async function load() {
     try {
-      const [h, a, e, ts, al] = await Promise.all([
+      const [h, a, e, ts, al, hm] = await Promise.all([
         ingestionApi.getHealth(serverId, 60),
         ingestionApi.getAnomalies(serverId, 15),
         ingestionApi.getEvents(serverId, { onlyFaults, limit: 50 }),
         ingestionApi.getTimeseries(serverId, 15, 24),
         ingestionApi.getAlertHistory(serverId, 20),
+        ingestionApi.getHeatmap(serverId, 168),
       ]);
       setHealth(h);
       setAnomalies(a);
       setEvents(e.events);
       setTimeseries(ts.buckets);
       setAlertHistory(al.alerts);
+      setHeatmap(hm.cells);
       setError(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function onFeedback(ev, correct) {
+    try {
+      await ingestionApi.submitFeedback(serverId, ev.ts, correct);
+      setFeedbackGiven((prev) => ({ ...prev, [ev.ts]: correct }));
     } catch (e) {
       setError(e.message);
     }
@@ -110,14 +136,15 @@ export default function ServerDetail() {
         <>
           <div className="grid">
             <StatTile label="Total calls (60m)" value={health.total_calls} />
-            <StatTile label="Error rate" value={`${(health.error_rate * 100).toFixed(1)}%`} />
-            <StatTile label="Silent failures" value={health.silent_failure_count} />
+            <StatTile label="Error rate" value={`${(health.error_rate * 100).toFixed(1)}%`} help={METRIC_HELP.errorRate} />
+            <StatTile label="Silent failures" value={health.silent_failure_count} help={METRIC_HELP.silentFailures} />
             <StatTile label="p50 latency" value={health.p50_latency_ms ? `${health.p50_latency_ms.toFixed(0)}ms` : "—"} />
-            <StatTile label="p95 latency" value={health.p95_latency_ms ? `${health.p95_latency_ms.toFixed(0)}ms` : "—"} />
+            <StatTile label="p95 latency" value={health.p95_latency_ms ? `${health.p95_latency_ms.toFixed(0)}ms` : "—"} help={METRIC_HELP.p95} />
             <StatTile label="p99 latency" value={health.p99_latency_ms ? `${health.p99_latency_ms.toFixed(0)}ms` : "—"} />
             <StatTile
               label="Avg CPU"
               value={health.process_metrics?.avg_cpu_percent != null ? `${health.process_metrics.avg_cpu_percent.toFixed(1)}%` : "—"}
+              help={METRIC_HELP.cpu}
             />
             <StatTile
               label="Memory (RSS)"
@@ -127,11 +154,14 @@ export default function ServerDetail() {
                   : "—"
               }
             />
-            <StatTile label="Dropped events" value={health.dropped_events_total} />
+            <StatTile label="Dropped events" value={health.dropped_events_total} help={METRIC_HELP.dropped} />
           </div>
 
           <div className="panel">
-            <h3>Health score breakdown</h3>
+            <h3>
+              Health score breakdown
+              <InfoTooltip text="Starts at 100 and subtracts weighted penalties: error rate, silent failures, latency over threshold, CPU/memory pressure, and taxonomy severity of classified faults. Fully transparent formula in health_scoring.py -- not a black box." />
+            </h3>
             <table>
               <tbody>
                 {Object.entries(health.health_breakdown || {}).map(([k, v]) => (
@@ -164,9 +194,22 @@ export default function ServerDetail() {
         </div>
       )}
 
+      {heatmap && heatmap.some((c) => c.total_calls > 0) && (
+        <div className="panel">
+          <h3>
+            Error rate by hour of day (7d)
+            <InfoTooltip text="Groups the last 7 days of calls by hour-of-day (UTC) to spot recurring bad windows, e.g. a nightly batch job or a specific traffic peak that consistently causes more errors." />
+          </h3>
+          <Heatmap cells={heatmap} />
+        </div>
+      )}
+
       {anomalies && (
         <div className="panel">
-          <h3>Anomalies (z-score vs. rolling history)</h3>
+          <h3>
+            Anomalies (z-score vs. rolling history)
+            <InfoTooltip text="Flags the current 15-minute window as anomalous if its error rate or p95 latency is more than a threshold number of standard deviations from the mean of recent historical windows -- adapts to this server's own normal variance instead of a fixed threshold." />
+          </h3>
           {anomalies.anomalies.length === 0 ? (
             <div className="empty-state">No anomalies detected.</div>
           ) : (
@@ -264,6 +307,7 @@ export default function ServerDetail() {
                 <th>Latency</th>
                 <th>Fault</th>
                 <th>Classification</th>
+                <th>Correct?</th>
               </tr>
             </thead>
             <tbody>
@@ -279,6 +323,26 @@ export default function ServerDetail() {
                     {ev.type === "protocol_violation" && ev.subtype}
                   </td>
                   <td>{classificationLabel(ev.classification)}</td>
+                  <td>
+                    {ev.classification ? (
+                      feedbackGiven[ev.ts] !== undefined ? (
+                        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                          {feedbackGiven[ev.ts] ? "marked correct" : "marked wrong"}
+                        </span>
+                      ) : (
+                        <span style={{ display: "flex", gap: 6 }}>
+                          <button style={{ padding: "2px 8px" }} onClick={() => onFeedback(ev, true)} title="Classification is correct">
+                            👍
+                          </button>
+                          <button style={{ padding: "2px 8px" }} onClick={() => onFeedback(ev, false)} title="Classification is wrong">
+                            👎
+                          </button>
+                        </span>
+                      )
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

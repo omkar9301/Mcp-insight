@@ -11,7 +11,7 @@ from .config import settings
 from .db import ensure_indexes
 from .logging_config import RequestLoggingMiddleware, configure_logging
 from .metrics_prom import PrometheusMiddleware, metrics_endpoint
-from .routes import alerts, events, health, keys
+from .routes import alerts, events, feedback, health, keys, stats
 
 configure_logging()
 
@@ -39,6 +39,8 @@ app.include_router(events.router, tags=["events"])
 app.include_router(health.router, tags=["health"])
 app.include_router(keys.router, tags=["keys"])
 app.include_router(alerts.router, tags=["alerts"])
+app.include_router(stats.router, tags=["stats"])
+app.include_router(feedback.router, tags=["feedback"])
 
 app.add_api_route("/metrics", metrics_endpoint, methods=["GET"])
 
