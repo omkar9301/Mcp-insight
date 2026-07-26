@@ -105,6 +105,8 @@ def _matches(doc: dict, query: dict) -> bool:
                 return False
             if "$lt" in cond and not (val is not None and val < cond["$lt"]):
                 return False
+            if "$lte" in cond and not (val is not None and val <= cond["$lte"]):
+                return False
             if "$exists" in cond and (val is not None) != cond["$exists"]:
                 return False
         else:

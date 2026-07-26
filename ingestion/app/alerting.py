@@ -75,6 +75,8 @@ async def _send_slack(text: str, blocks: list[dict] | None = None) -> None:
 
 
 async def maybe_alert_health(server_id: str, health: dict) -> None:
+    if health["score"] is None:
+        return  # idle -- no calls in the window, nothing to alert on
     if health["score"] >= settings.alert_score_threshold:
         return
     if await _is_muted(server_id):

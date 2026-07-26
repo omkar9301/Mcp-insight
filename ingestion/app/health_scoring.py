@@ -62,8 +62,27 @@ def compute_health_score(
     mem_samples: list[int],
     classified_severities: list[str],
 ) -> dict:
-    """Returns {"score": float, "breakdown": {...}} -- the breakdown makes
-    the score auditable instead of a black box."""
+    """Returns {"score": float | None, "status": str, "breakdown": {...}}.
+
+    When there were zero calls in the window, there is nothing to score --
+    returning a numeric 100 here is actively misleading (a server that's
+    crashed, unreachable, or simply never wrapped looks identical to a
+    perfectly healthy one). Status is "idle" and score is `None` instead;
+    callers must treat `None` as "no data", not as a passing score.
+    """
+    if total_calls == 0:
+        return {
+            "score": None,
+            "status": "idle",
+            "breakdown": {
+                "error_rate_penalty": 0.0,
+                "silent_failure_penalty": 0.0,
+                "latency_penalty": 0.0,
+                "process_penalty": 0.0,
+                "severity_penalty": 0.0,
+            },
+        }
+
     breakdown: dict[str, float] = {}
 
     error_rate = (error_count / total_calls) if total_calls else 0.0

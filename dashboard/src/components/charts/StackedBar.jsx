@@ -12,7 +12,7 @@ const DEFAULT_COLORS = {
 // A single proportional horizontal bar, segmented by category -- good for
 // "what fraction of total is each severity" at a glance, complementing
 // the donut (which is better for eyeballing absolute share visually).
-export default function StackedBar({ counts, colors = DEFAULT_COLORS, height = 28 }) {
+export default function StackedBar({ counts, colors = DEFAULT_COLORS, height = 28, onSegmentClick }) {
   const entries = Object.entries(counts).filter(([, v]) => v > 0);
   const total = entries.reduce((sum, [, v]) => sum + v, 0);
 
@@ -26,14 +26,23 @@ export default function StackedBar({ counts, colors = DEFAULT_COLORS, height = 2
         {entries.map(([label, value]) => (
           <div
             key={label}
-            title={`${label}: ${value} (${((value / total) * 100).toFixed(1)}%)`}
-            style={{ width: `${(value / total) * 100}%`, background: colors[label] || "var(--accent)" }}
+            title={`${label}: ${value} (${((value / total) * 100).toFixed(1)}%)${onSegmentClick ? " -- click to filter" : ""}`}
+            style={{
+              width: `${(value / total) * 100}%`,
+              background: colors[label] || "var(--accent)",
+              cursor: onSegmentClick ? "pointer" : "default",
+            }}
+            onClick={onSegmentClick ? () => onSegmentClick(label) : undefined}
           />
         ))}
       </div>
       <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap" }}>
         {entries.map(([label, value]) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <div
+            key={label}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: onSegmentClick ? "pointer" : "default" }}
+            onClick={onSegmentClick ? () => onSegmentClick(label) : undefined}
+          >
             <span style={{ width: 9, height: 9, borderRadius: 2, background: colors[label] || "var(--accent)", display: "inline-block" }} />
             {label}: {value} ({((value / total) * 100).toFixed(0)}%)
           </div>

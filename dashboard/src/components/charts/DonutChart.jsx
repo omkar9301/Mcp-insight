@@ -8,10 +8,11 @@ const DEFAULT_COLORS = {
   minor: "var(--healthy)",
   major: "var(--degraded)",
   unknown: "var(--text-dim)",
+  idle: "var(--text-dim)",
 };
 
 // Dependency-free SVG donut via stroke-dasharray segments on a circle.
-export default function DonutChart({ counts, size = 160, strokeWidth = 24, colors = DEFAULT_COLORS }) {
+export default function DonutChart({ counts, size = 160, strokeWidth = 24, colors = DEFAULT_COLORS, onSegmentClick }) {
   const entries = Object.entries(counts).filter(([, v]) => v > 0);
   const total = entries.reduce((sum, [, v]) => sum + v, 0);
   const radius = (size - strokeWidth) / 2;
@@ -45,8 +46,10 @@ export default function DonutChart({ counts, size = 160, strokeWidth = 24, color
               strokeWidth={strokeWidth}
               strokeDasharray={`${s.dash} ${circumference - s.dash}`}
               strokeDashoffset={-s.offset}
+              style={onSegmentClick ? { cursor: "pointer" } : undefined}
+              onClick={onSegmentClick ? () => onSegmentClick(s.label) : undefined}
             >
-              <title>{`${s.label}: ${s.value}`}</title>
+              <title>{`${s.label}: ${s.value}${onSegmentClick ? " (click to filter)" : ""}`}</title>
             </circle>
           ))}
         </g>
@@ -56,7 +59,11 @@ export default function DonutChart({ counts, size = 160, strokeWidth = 24, color
       </svg>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {segments.map((s, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <div
+            key={i}
+            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: onSegmentClick ? "pointer" : "default" }}
+            onClick={onSegmentClick ? () => onSegmentClick(s.label) : undefined}
+          >
             <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, display: "inline-block" }} />
             {s.label} ({s.value})
           </div>

@@ -125,6 +125,35 @@ async def list_servers():
     return {"servers": servers}
 
 
+@router.get("/v1/servers/{server_id}/tools")
+async def get_server_tools(server_id: str):
+    """The tool registry captured from this server's `initialize`
+    response or a `tools/list` call -- name, description, and both
+    schemas for every tool it declared. Empty until the wrapper sees one
+    of those messages; servers that declare tools some other way (or a
+    proxy session that started mid-conversation) won't have this."""
+    db = get_db()
+    server = await db["servers"].find_one({"server_id": server_id})
+    if server is None:
+        raise HTTPException(status_code=404, detail="Unknown server_id -- no events received yet")
+    return {
+        "server_id": server_id,
+        "tools": server.get("tools", []),
+        "tools_updated_at": server.get("tools_updated_at"),
+    }
+
+
+@router.get("/v1/tools")
+async def get_all_tools():
+    """Fleet-wide tool registry: every server that has ever reported its
+    capabilities, with its declared tools -- one call instead of N."""
+    db = get_db()
+    rows = []
+    async for doc in db["servers"].find({"tools": {"$exists": True}}, {"_id": 0, "server_id": 1, "tools": 1, "tools_updated_at": 1}):
+        rows.append(doc)
+    return {"servers": rows}
+
+
 @router.get("/v1/servers/{server_id}/events")
 async def recent_events(server_id: str, limit: int = Query(50, ge=1, le=500), only_faults: bool = False):
     db = get_db()
@@ -145,9 +174,30 @@ async def events_by_classification(
 ):
     """Cross-server drill-down: every stored fault event classified into
     this taxonomy subcategory, most recent first -- what the taxonomy
-    reference view links out to."""
+    reference view links out to. Also returns aggregate stats (total
+    count, per-server breakdown, first/last seen) computed over *all*
+    matching events, not just the page returned in `events` -- so the
+    page can show "seen 340 times across 4 servers" even when only
+    showing the most recent 50."""
     db = get_db()
     query = {"classification.category": category, "classification.subcategory": subcategory}
+
+    all_matching = [doc async for doc in db["events"].find(query, {"_id": 0, "server_id": 1, "ts": 1})]
+    per_server: dict[str, int] = {}
+    for doc in all_matching:
+        per_server[doc["server_id"]] = per_server.get(doc["server_id"], 0) + 1
+    timestamps = [doc["ts"] for doc in all_matching]
+
     cursor = db["events"].find(query, {"_id": 0}).sort("ts", -1).limit(limit)
     events = [doc async for doc in cursor]
-    return {"category": category, "subcategory": subcategory, "events": events}
+
+    return {
+        "category": category,
+        "subcategory": subcategory,
+        "events": events,
+        "total_count": len(all_matching),
+        "distinct_servers": len(per_server),
+        "per_server_counts": per_server,
+        "first_seen": min(timestamps) if timestamps else None,
+        "last_seen": max(timestamps) if timestamps else None,
+    }

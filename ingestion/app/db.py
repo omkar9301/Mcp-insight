@@ -37,3 +37,7 @@ async def ensure_indexes() -> None:
 
     alerts = db["alerts"]
     await alerts.create_index([("server_id", 1), ("sent_at", -1)])
+    await alerts.create_index("sent_at")
+
+    fleet_snapshots = db["fleet_snapshots"]
+    await fleet_snapshots.create_index("ts")

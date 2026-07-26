@@ -71,6 +71,8 @@ def test_score_never_goes_below_zero():
     assert result["status"] == "critical"
 
 
-def test_zero_calls_no_division_error():
+def test_zero_calls_returns_idle_not_a_perfect_score():
     result = compute_health_score(0, 0, 0, None, [], [], [])
-    assert result["score"] == 100.0
+    assert result["score"] is None
+    assert result["status"] == "idle"
+    assert all(v == 0.0 for v in result["breakdown"].values())

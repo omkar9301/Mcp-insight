@@ -54,14 +54,41 @@ async def test_severity_breakdown_counts_by_severity(monkeypatch):
 @pytest.mark.asyncio
 async def test_health_distribution_counts_by_status(monkeypatch):
     db = WritableFakeDB()
-    await db["servers"].insert_one({"server_id": "a", "latest_health": {"status": "healthy"}})
-    await db["servers"].insert_one({"server_id": "b", "latest_health": {"status": "degraded"}})
-    await db["servers"].insert_one({"server_id": "c", "latest_health": {"status": "healthy"}})
+    now = time.time()
+    await db["servers"].insert_one({"server_id": "a", "last_seen": now, "latest_health": {"status": "healthy"}})
+    await db["servers"].insert_one({"server_id": "b", "last_seen": now, "latest_health": {"status": "degraded"}})
+    await db["servers"].insert_one({"server_id": "c", "last_seen": now, "latest_health": {"status": "healthy"}})
     monkeypatch.setattr(stats_module, "get_db", lambda: db)
 
-    result = await stats_module.health_distribution()
+    result = await stats_module.health_distribution(idle_after_minutes=60)
     assert result["total_servers"] == 3
     assert result["counts"] == {"healthy": 2, "degraded": 1}
+
+
+@pytest.mark.asyncio
+async def test_health_distribution_treats_stale_servers_as_idle_not_cached_status(monkeypatch):
+    db = WritableFakeDB()
+    now = time.time()
+    # last_seen 2 hours ago, but cached status still says "healthy" from
+    # back when it was last actually ingesting -- must not be trusted.
+    await db["servers"].insert_one({
+        "server_id": "stale", "last_seen": now - 7200, "latest_health": {"status": "healthy"},
+    })
+    await db["servers"].insert_one({"server_id": "fresh", "last_seen": now, "latest_health": {"status": "healthy"}})
+    monkeypatch.setattr(stats_module, "get_db", lambda: db)
+
+    result = await stats_module.health_distribution(idle_after_minutes=60)
+    assert result["counts"] == {"idle": 1, "healthy": 1}
+
+
+@pytest.mark.asyncio
+async def test_health_distribution_treats_never_seen_as_idle(monkeypatch):
+    db = WritableFakeDB()
+    await db["servers"].insert_one({"server_id": "ghost", "latest_health": {"status": "healthy"}})
+    monkeypatch.setattr(stats_module, "get_db", lambda: db)
+
+    result = await stats_module.health_distribution(idle_after_minutes=60)
+    assert result["counts"] == {"idle": 1}
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ class Interceptor:
         self.buffer = EventBuffer(ingestion_url=ingestion_url, server_id=server_id, api_key=api_key)
         self.tracker = PendingRequestTracker()
         self.schema_guard = SchemaGuard()
+        self._last_tools_sent: dict | None = None
 
     def handle_message(self, msg: CapturedMessage) -> None:
         if msg.parsed is None:
@@ -48,6 +49,18 @@ class Interceptor:
         if matched is None:
             return
 
+        # Some servers report their tool list via a dedicated `tools/list`
+        # call instead of (or in addition to) inline in `initialize` --
+        # capture that path too so the tool registry doesn't stay empty
+        # for those servers.
+        if matched["method"] == "tools/list" and not matched["is_error"]:
+            result = matched.get("result") or {}
+            tools = result.get("tools")
+            if isinstance(tools, list):
+                self.schema_guard.ingest_tools_list(tools)
+
+        self._maybe_send_capabilities(msg.ts)
+
         event = {
             "type": "rpc_call",
             "ts": msg.ts,
@@ -74,3 +87,18 @@ class Interceptor:
 
     def on_process_metrics(self, sample: dict) -> None:
         self.buffer.put(sample)
+
+    def _maybe_send_capabilities(self, ts: float) -> None:
+        """Sends the current tool registry as a `server_capabilities`
+        event whenever it changes -- lets the dashboard show "what does
+        this server expose" without polling; only sent on actual change,
+        not on every message, to avoid flooding the buffer."""
+        tools = self.schema_guard.tools
+        if not tools or tools == self._last_tools_sent:
+            return
+        self._last_tools_sent = dict(tools)
+        self.buffer.put({
+            "type": "server_capabilities",
+            "ts": ts,
+            "tools": list(tools.values()),
+        })

@@ -5,6 +5,7 @@ import HealthBadge from "./HealthBadge.jsx";
 import Sparkline from "./Sparkline.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import Heatmap from "./charts/Heatmap.jsx";
+import AdvisoryPanel from "./AdvisoryPanel.jsx";
 
 const METRIC_HELP = {
   errorRate: "Fraction of tool/method calls that returned a JSON-RPC error object in the window.",
@@ -45,16 +46,18 @@ export default function ServerDetail() {
   const [muteMinutes, setMuteMinutes] = useState(60);
   const [heatmap, setHeatmap] = useState(null);
   const [feedbackGiven, setFeedbackGiven] = useState({});
+  const [tools, setTools] = useState(null);
 
   async function load() {
     try {
-      const [h, a, e, ts, al, hm] = await Promise.all([
+      const [h, a, e, ts, al, hm, tl] = await Promise.all([
         ingestionApi.getHealth(serverId, 60),
         ingestionApi.getAnomalies(serverId, 15),
         ingestionApi.getEvents(serverId, { onlyFaults, limit: 50 }),
         ingestionApi.getTimeseries(serverId, 15, 24),
         ingestionApi.getAlertHistory(serverId, 20),
         ingestionApi.getHeatmap(serverId, 168),
+        ingestionApi.getServerTools(serverId),
       ]);
       setHealth(h);
       setAnomalies(a);
@@ -62,6 +65,7 @@ export default function ServerDetail() {
       setTimeseries(ts.buckets);
       setAlertHistory(al.alerts);
       setHeatmap(hm.cells);
+      setTools(tl.tools);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -132,6 +136,14 @@ export default function ServerDetail() {
 
       {error && <div className="error-banner">{error}</div>}
 
+      {health && health.total_calls === 0 && (
+        <div className="error-banner" style={{ borderColor: "var(--text-dim)", color: "var(--text-dim)" }}>
+          No calls received in the last 60 minutes. This server is idle, not confirmed healthy -- the health
+          score only reflects windows with actual traffic. Last seen:{" "}
+          {health.last_seen ? new Date(health.last_seen * 1000).toLocaleString() : "never"}.
+        </div>
+      )}
+
       {health && (
         <>
           <div className="grid">
@@ -174,6 +186,38 @@ export default function ServerDetail() {
             </table>
           </div>
         </>
+      )}
+
+      {tools && (
+        <div className="panel">
+          <h3>
+            Exposed tools
+            <InfoTooltip text="Captured live from this server's initialize response or a tools/list call -- not manually configured. If this is empty, the wrapper hasn't seen either message yet for this session." />
+          </h3>
+          {tools.length === 0 ? (
+            <div className="empty-state">
+              No tool declarations captured yet for this server. See the full{" "}
+              <Link to="/tools">Tool Registry</Link> for other servers.
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Tool</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tools.map((t, i) => (
+                  <tr key={i}>
+                    <td className="mono">{t.name}</td>
+                    <td style={{ fontSize: 13, color: "var(--text-dim)" }}>{t.description || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
 
       {timeseries && timeseries.some((b) => b.total_calls > 0) && (
@@ -308,6 +352,7 @@ export default function ServerDetail() {
                 <th>Fault</th>
                 <th>Classification</th>
                 <th>Correct?</th>
+                <th>AI Advisory</th>
               </tr>
             </thead>
             <tbody>
@@ -339,6 +384,13 @@ export default function ServerDetail() {
                           </button>
                         </span>
                       )
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>
+                    {ev.classification ? (
+                      <AdvisoryPanel serverId={serverId} ts={ev.ts} initialAdvisory={ev.ai_advisory} />
                     ) : (
                       "—"
                     )}

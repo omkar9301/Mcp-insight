@@ -47,6 +47,18 @@ async def ingest_events(batch: EventBatch, authorization: str | None = Header(de
         d["server_id"] = batch.server_id
         d["ingested_at"] = time.time()
 
+        # server_capabilities isn't a traffic event -- it's a registry
+        # update (what tools this server declares). Denormalize it onto
+        # the server doc for O(1) lookup instead of storing it in the
+        # events collection and scanning for it later.
+        if d.get("type") == "server_capabilities":
+            await db["servers"].update_one(
+                {"server_id": batch.server_id},
+                {"$set": {"tools": d.get("tools", []), "tools_updated_at": time.time()}},
+            )
+            EVENTS_INGESTED.labels(type="server_capabilities").inc()
+            continue
+
         # Auto-classify fault-shaped events against the real taxonomy so
         # every stored fault carries a category/severity without a caller
         # having to invoke the classifier separately.

@@ -94,6 +94,23 @@ export const ingestionApi = {
       method: "POST",
       body: JSON.stringify({ correct, note }),
     }),
+  getAlertingStatus: () => request(getSettings().ingestionUrl, "/v1/stats/alerting-status"),
+  getLowConfidenceCount: (windowMinutes = 1440) =>
+    request(getSettings().ingestionUrl, `/v1/stats/low-confidence-count?window_minutes=${windowMinutes}`),
+  postFleetSnapshot: (payload) =>
+    request(getSettings().ingestionUrl, "/v1/stats/fleet-snapshot", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getFleetSnapshot: (hoursAgo = 24) =>
+    request(getSettings().ingestionUrl, `/v1/stats/fleet-snapshot?hours_ago=${hoursAgo}`),
+  getServerTools: (serverId) => request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/tools`),
+  getAllTools: () => request(getSettings().ingestionUrl, "/v1/tools"),
+  getAdvisoryStatus: () => request(getSettings().ingestionUrl, "/v1/advisory/status"),
+  getAdvisory: (serverId, ts, force = false) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/events/${ts}/advisory?force=${force}`, {
+      method: "POST",
+    }),
 };
 
 export const classifierApi = {
@@ -104,5 +121,18 @@ export const classifierApi = {
       body: JSON.stringify({ text, top_k: topK }),
     }),
 };
+
+// Unauthenticated root pings -- used only for the sidebar connectivity
+// badge, deliberately not going through `request()` (which throws on
+// non-2xx and requires an API key) since we want this to work even
+// before/without a valid key configured, to help diagnose exactly that.
+export async function pingService(baseUrl) {
+  try {
+    const resp = await fetch(`${baseUrl}/`, { method: "GET" });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
 
 export { ApiError };

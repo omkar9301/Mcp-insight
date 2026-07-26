@@ -132,6 +132,7 @@ th { color: var(--text-dim); font-weight: 500; }
 .badge.degraded { background: var(--degraded); }
 .badge.unhealthy { background: var(--unhealthy); }
 .badge.critical { background: var(--critical); color: #fff; }
+.badge.idle { background: var(--border); color: var(--text-dim); }
 
 .server-card {
   display: block;

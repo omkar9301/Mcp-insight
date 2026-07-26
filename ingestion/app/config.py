@@ -37,6 +37,11 @@ class Settings:
             os.environ.get("RATE_LIMIT_READ_PER_MINUTE", "300")
         )
 
+        self.anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.anthropic_advisory_model: str = os.environ.get(
+            "ANTHROPIC_ADVISORY_MODEL", "claude-haiku-4-5-20251001"
+        )
+
     @property
     def auth_enabled(self) -> bool:
         return bool(self.api_key)

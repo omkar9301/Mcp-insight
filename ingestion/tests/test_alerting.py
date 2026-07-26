@@ -58,6 +58,17 @@ async def test_health_alert_respects_cooldown(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_health_alert_skipped_when_idle_none_score(monkeypatch):
+    db = WritableFakeDB()
+    monkeypatch.setattr(alerting, "get_db", lambda: db)
+    monkeypatch.setattr(settings, "alert_score_threshold", 60)
+
+    # Must not raise (None >= threshold would TypeError) and must not alert.
+    await alerting.maybe_alert_health("srv-1", {"score": None, "status": "idle", "breakdown": {}})
+    assert db._collections.get("alerts") is None or db._collections["alerts"]._docs == []
+
+
+@pytest.mark.asyncio
 async def test_anomaly_alert_skipped_when_no_anomalies(monkeypatch):
     db = WritableFakeDB()
     monkeypatch.setattr(alerting, "get_db", lambda: db)

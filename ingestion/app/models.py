@@ -23,6 +23,8 @@ class RawEvent(BaseModel):
     num_fds: Optional[int] = None
     num_threads: Optional[int] = None
     num_connections: Optional[int] = None
+    # server_capabilities fields
+    tools: Optional[list[dict]] = None
 
 
 class EventBatch(BaseModel):

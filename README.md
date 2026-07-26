@@ -231,9 +231,13 @@ limits, and 2 uvicorn workers each for ingestion/classifier.
   the anomaly panel (z-score based), alert history with a mute control, and
   a per-server API key panel (mint/rotate/revoke inline, no curl needed).
 - **Taxonomy reference page** rows are now clickable -- each links to
-  `GET /v1/events/by-classification`, a cross-server view of every live
-  event classified into that subcategory, most recent first, linking back
-  to the originating server.
+  `GET /v1/events/by-classification`, a cross-server drill-down page for
+  that subcategory: the taxonomy description and confirmed%/severity/
+  effort up top, aggregate stats (total occurrences, servers affected,
+  first/last seen -- computed server-side over *all* matches, not just
+  the page shown), a per-server occurrence bar chart, and an events table
+  showing the actual tool name and violation detail (not just the generic
+  RPC method) with inline thumbs up/down feedback per event.
 
 ## 12. Overview page, charts, category/severity views, classification feedback
 
@@ -268,6 +272,127 @@ limits, and 2 uvicorn workers each for ingestion/classifier.
 - All new charts (`BarChart`, `DonutChart`, `StackedBar`, `Heatmap`) are
   dependency-free -- plain SVG/DOM, no charting library added, keeping the
   dashboard's bundle small (~62KB gzipped total).
+
+## 13. Overview page: sorting, comparison table, trends, quick actions
+
+The servers section of the Overview page (`/`) was a flat, arbitrarily-ordered
+list -- now:
+- **Sorted worst-first by default** (critical > unhealthy > degraded >
+  healthy > idle), with a colored left border per card/row matching
+  status, so you can scan for trouble without reading every line.
+- **Search box + status filter** to narrow down a large fleet.
+- **Table view toggle** -- a sortable comparison table (click any column
+  header) with server, status, score, error rate, p95 latency, silent
+  failures, and last-seen side by side, instead of eyeballing separate
+  cards.
+- **Relative timestamps** ("3m ago" instead of a full date string).
+- **Per-server error-rate trend sparkline** on each card (last ~2h, via
+  the existing `/timeseries` endpoint), so you can see whether a server
+  is trending up or down, not just its current snapshot.
+- **Inline mute/unmute** button on each card -- silence a noisy server's
+  alerts for 60 minutes without navigating to its detail page.
+
+## 14. Overview page: context, trust signals, actionability
+
+A round of "what would confuse a brand-new user" review surfaced real
+gaps in the KPI tiles and charts -- fixed:
+- **KPI tiles now explain themselves.** "Avg health score" shows "/100",
+  is color-coded to match its severity, and states inline how many active
+  servers it's averaged over (it always excluded idle servers, but that
+  was previously only visible in a tooltip). "Servers" breaks down into
+  active/idle inline instead of a bare count.
+- **KPI deltas** ("▲ 3.2 vs 24h ago") via a new lightweight
+  `fleet_snapshots` collection (`POST/GET /v1/stats/fleet-snapshot`,
+  throttled server-side to one snapshot per 15 minutes regardless of
+  polling frequency) -- so numbers show direction, not just a snapshot.
+- **"Needs attention" callout** at the top of the page, highlighting
+  whichever active server has the worst score -- instead of making you
+  scroll the full list to find it.
+- **Fixed the severity chart being unreadable with one category.** A
+  stacked bar with only `major` present rendered as one solid bar filling
+  100% width -- indistinguishable from a loading bar. Replaced with
+  `SeverityBars`, which always renders all three severities (even at
+  zero) so there's a real comparison to look at.
+- **Donut and severity chart segments are now clickable** -- click
+  "unhealthy" on the fleet-health donut to filter the servers list to it;
+  click a severity bar to jump straight to `/severity/{level}`.
+- **Backend connectivity badge** in the sidebar -- pings both services'
+  unauthenticated root endpoints every 20s and shows one clear
+  connected/disconnected signal, instead of scattered per-page error
+  banners when the API URL or key is misconfigured.
+- **System status panel**: alerting configured/not, how many alerts sent
+  in the last 24h and when the last one went out (`GET
+  /v1/stats/alerting-status`) -- alerting existed before this but was
+  completely invisible from the dashboard. Also surfaces a count of
+  faults classified with low confidence in the last 24h (`GET
+  /v1/stats/low-confidence-count`), connecting the Overview page to the
+  feedback loop from section 12.
+- **Demo/test tag** on server names matching `^demo` (prefix heuristic,
+  not a real tagging system) -- so sample data from the bundled demo
+  doesn't read as a real production server to a new user.
+- **Onboarding banner** when zero servers have live traffic -- tells the
+  user exactly what command to run instead of just showing small numbers
+  with no explanation.
+- **Last-updated indicator** ("Updated 3s ago · refreshes every 15s") so
+  the polling behavior is visible instead of implicit.
+
+## 15. Tool Registry -- what each server actually exposes
+
+A new "Tool Registry" page (`/tools` in the sidebar) and a per-server
+panel answer "what tools/APIs does this MCP server actually have,"
+captured live, not manually documented:
+
+- The wrapper's `SchemaGuard` already parsed tool declarations from a
+  server's `initialize` response (for schema validation) -- it now also
+  captures them from a `tools/list` response if a server reports tools
+  that way instead, and keeps full metadata per tool (name, description,
+  input schema, output schema), not just the output schema it needed for
+  validation.
+- Whenever the captured tool registry changes, the wrapper sends a
+  `server_capabilities` event (deduplicated -- only on actual change, not
+  on every message) alongside normal traffic events.
+- Ingestion denormalizes this onto the server's document (`tools`,
+  `tools_updated_at`) instead of the events collection -- it's a registry
+  update, not a traffic event, so `GET /v1/servers/{id}/tools` and the
+  fleet-wide `GET /v1/tools` are O(1) lookups, not scans.
+- The dashboard's Tool Registry page groups by server, shows each tool's
+  name/description/input-output field summary, and expands to the full
+  raw JSON Schema on click. The server detail page has a matching compact
+  panel.
+- This only ever shows what's actually been observed -- a server that
+  hasn't sent `initialize` or `tools/list` through the wrapper yet (or a
+  proxy session that started mid-conversation) shows an empty registry,
+  not a guess.
+
+## 16. AI Advisory -- root-cause analysis per captured fault
+
+An on-demand "Get AI Advisory" button on any classified fault event (in
+the taxonomy drill-down and server detail event tables) asks an LLM
+(Claude, same `ANTHROPIC_API_KEY` as the classifier's LLM fallback --
+section 5) to explain, in depth, what actually happened:
+
+- **Summary** -- plain-language description of the fault.
+- **Root cause** -- reasoned through the MCP request/response lifecycle
+  (transport -> protocol parsing -> tool handler execution -> result
+  serialization -> schema validation), naming which layer it traces to,
+  and explicitly calling out token/context-length or
+  embedding/vector-retrieval issues *if and only if* the data actually
+  points there.
+- **Suggested solution** -- concrete steps tied to the real captured
+  data, not generic advice.
+- **"Grounded in"** -- states exactly which fields the analysis is based
+  on. This matters: the wrapper never sends full tool call arguments or
+  results to ingestion by design (only metadata and violation summaries
+  -- see "Fail-open by design" below), so the advisory is built only from
+  what was actually captured (method, latency, error/violation detail,
+  taxonomy classification) and says so explicitly rather than inventing
+  a request/response payload trace that was never observed.
+
+Generated once per event and cached on the event document (`POST
+/v1/servers/{id}/events/{ts}/advisory`, `force=true` to regenerate) so
+repeat views don't re-spend an LLM call. Reports itself as
+"not configured" rather than erroring if `ANTHROPIC_API_KEY` is unset
+(`GET /v1/advisory/status`).
 
 ## Running tests
 
@@ -456,3 +581,88 @@ implemented; blended TF-IDF+LLM confidence scoring wasn't built as a
 single unified number -- the LLM pick is prepended as a separate
 `source: "llm"` result alongside the TF-IDF ones, not merged into one
 score.
+
+**Follow-up**: the taxonomy drill-down page (`/taxonomy/:category/:subcategory`)
+was reworked from a flat event log into the detailed view described in
+section 12 -- taxonomy description/severity/effort header, aggregate
+stats computed server-side over all matches (not just the displayed
+page), per-server occurrence bar chart, tool name + violation detail
+columns, and inline feedback. `GET /v1/events/by-classification` now
+returns `total_count`/`distinct_servers`/`per_server_counts`/`first_seen`/
+`last_seen` alongside the event page. Validated live: hit the endpoint
+directly and confirmed the aggregate counts (36 total across 6 servers)
+matched real accumulated demo data, including a feedback record from an
+earlier test showing up correctly on its event. 55 ingestion tests pass
+(up from 53).
+
+**Bug fix (real, user-reported)**: a server with zero calls in the
+current 60-minute window was reported as `healthy | 100` -- a perfect
+score is not the same thing as "no data," and this made crashed,
+disconnected, or never-wrapped servers indistinguishable from genuinely
+healthy ones. Fixed at the source: `compute_health_score` now returns
+`status: "idle"` and `score: null` when `total_calls == 0`, instead of
+scoring an empty window as perfect. This required guarding every
+downstream consumer of `health["score"]` that assumed a number
+(`alerting.maybe_alert_health` would otherwise crash comparing `None >=
+threshold`). A second, related staleness bug was caught in the same pass:
+`/v1/stats/health-distribution` (the Overview page's fleet-health donut)
+was reading a *cached* `latest_health.status` written the last time a
+server ingested data -- a server that went quiet kept reporting whatever
+status it had the last time it was active, arbitrarily stale. Now checks
+`last_seen` recency and buckets anything stale as `idle` regardless of
+the cached value. Dashboard updated to match: `HealthBadge`/`DonutChart`
+gained an `idle` style, the servers list shows "no activity in the last
+60 minutes" instead of a misleading "0 calls, 0.0% errors" line, and the
+server detail page shows an explicit idle banner. Validated live: all 7
+stale demo servers (last seen 4+ days ago in wall-clock time) correctly
+now show `idle` instead of a cached `healthy`; a freshly driven demo run
+correctly still shows a real computed score (`unhealthy | 67.66`, not
+`healthy | 100`). 58 ingestion tests pass (up from 55).
+
+### Stage 2, Phase E (Overview page context and trust signals)
+
+Added three new endpoints (`alerting-status`, `low-confidence-count`,
+`fleet-snapshot` POST+GET) and reworked the Overview page per section 14.
+Validated live: hit all three new endpoints directly and got real values
+back (`configured: false` correctly reflecting no `SLACK_WEBHOOK_URL`
+set; a posted snapshot correctly retrievable, and correctly throttled on
+a second immediate post); confirmed both services' unauthenticated root
+endpoints the connectivity badge depends on return 200. `npm run build`
+passes (~66KB gzipped, still no new dependencies). 64 ingestion tests
+pass (up from 58).
+
+### Stage 2, Phase F (Tool Registry)
+
+Added tool-registry capture to the wrapper (`SchemaGuard.tools`,
+`tools/list` support, change-deduplicated `server_capabilities` events),
+storage/serving in ingestion (`GET /v1/servers/{id}/tools`, `GET
+/v1/tools`), and the dashboard's Tool Registry page + per-server panel.
+Validated live end-to-end, not just unit-tested: drove real demo traffic
+through the wrapper and confirmed the actual captured schema came back
+correctly from both the per-server and fleet-wide endpoints (tool name
+`add_numbers`, full input/output JSON Schema, required fields intact),
+and confirmed both new dashboard routes serve 200. 67 ingestion tests
+pass (up from 64), 18 wrapper tests pass (up from 15, three new
+interceptor-level tests covering capture-on-initialize,
+no-resend-when-unchanged, and capture-from-`tools/list`).
+
+### Stage 2, Phase G (AI Advisory)
+
+Added `ingestion/app/advisory.py` (LLM root-cause analysis, grounded
+strictly in captured event fields, explicit about what wasn't observed),
+a caching endpoint (`POST /v1/servers/{id}/events/{ts}/advisory`), and
+the `AdvisoryPanel` dashboard component wired into both the taxonomy
+drill-down and server detail event tables. Validated live with a real
+`ANTHROPIC_API_KEY` configured (not just the disabled/unconfigured path):
+generated a real advisory for an actual captured `demo-tools` silent
+failure and the model correctly reasoned out the exact root cause (tool
+handler returning an incomplete result, missing the required `sum`
+field) from metadata alone -- confirmed the caching path returns
+`cached: true` on a second call without re-invoking the LLM, and `force:
+true` regenerates. One thing worth noting, not a bug: an early raw
+response briefly appeared to contain a mangled em-dash
+(`â€”`); re-inspecting the raw response bytes directly
+confirmed the JSON itself was clean UTF-8 -- the mangling was a Windows
+terminal display artifact from piping through `python -m json.tool`, not
+an encoding bug in the ingestion service or the LLM response. 75
+ingestion tests pass (up from 67).
