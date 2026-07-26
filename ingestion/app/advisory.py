@@ -20,10 +20,13 @@ exactly what data it had to work with, instead of inventing detail that
 was never actually observed.
 """
 import json
+import logging
 
 import httpx
 
 from .config import settings
+
+_log = logging.getLogger("mcp_insight.ingestion.advisory")
 
 _client: httpx.AsyncClient | None = None
 
@@ -130,5 +133,23 @@ async def generate_advisory(event: dict) -> dict | None:
             "data_available": parsed.get("data_available"),
             "confidence": parsed.get("confidence"),
         }
+    except httpx.HTTPStatusError as e:
+        # Surfaces exactly the failure mode that bit us during testing: a
+        # misconfigured/invalid ANTHROPIC_ADVISORY_MODEL fails silently
+        # into a bare 502 with zero trace unless this is logged.
+        _log.warning(
+            "advisory_http_error",
+            extra={"extra_fields": {
+                "status_code": e.response.status_code,
+                "model": settings.anthropic_advisory_model,
+                "body": e.response.text[:300],
+            }},
+        )
+        return None
     except Exception:
+        _log.warning(
+            "advisory_generation_failed",
+            exc_info=True,
+            extra={"extra_fields": {"model": settings.anthropic_advisory_model}},
+        )
         return None

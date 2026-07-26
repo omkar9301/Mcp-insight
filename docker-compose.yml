@@ -22,6 +22,7 @@ services:
       DASHBOARD_ORIGINS: ${DASHBOARD_ORIGINS:-http://localhost:5173,http://localhost:4173}
       RATE_LIMIT_CLASSIFY_PER_MINUTE: ${RATE_LIMIT_CLASSIFY_PER_MINUTE:-300}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_CLASSIFY_MODEL: ${ANTHROPIC_CLASSIFY_MODEL:-claude-haiku-4-5-20251001}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/')"]
       interval: 10s

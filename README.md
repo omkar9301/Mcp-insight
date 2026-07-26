@@ -394,6 +394,33 @@ repeat views don't re-spend an LLM call. Reports itself as
 "not configured" rather than erroring if `ANTHROPIC_API_KEY` is unset
 (`GET /v1/advisory/status`).
 
+## 17. Fault Taxonomy page: live occurrence data, filtering, methodology
+
+The taxonomy reference page (`/taxonomy`) was a static 27-row table with
+no connection to your actual data -- now:
+- **"In your fleet (30d)" column** -- real occurrence counts per
+  subcategory from `GET /v1/stats/category-counts`, clickable straight
+  into the drill-down when nonzero. Rows with zero occurrences are dimmed
+  rather than deleted, so you can see what's *possible* per the taxonomy
+  vs. what's actually happened to you.
+- **"Subcategories seen" / "Total classified faults" KPI tiles** at the
+  top -- e.g. "1 / 27" tells you at a glance how narrow or broad your
+  fault exposure has been.
+- **Sort by occurrences** (checkbox) -- reorders the table around what's
+  actually hitting your fleet instead of the paper's original ordering.
+- **Search + category filter + severity filter** -- 27 rows is a lot to
+  scroll for one category.
+- **Severity distribution mini-bar** per row (not just "dominant") -- the
+  taxonomy data already carries full minor/major/critical percentages
+  per subcategory; previously only the single dominant value was shown,
+  throwing away the rest. Color-coded severity badges replace plain text.
+- **"About this taxonomy" expandable panel** -- methodology summary
+  (837 threads, 473 repos, 55 validators, TF-IDF+LLM matching) for
+  someone unfamiliar with the source study.
+- No backend changes were needed for any of this -- it's built entirely
+  from data the existing `/v1/stats/category-counts` and
+  `GET /v1/taxonomy` endpoints already returned.
+
 ## Running tests
 
 Each service has its own virtualenv and test suite:
@@ -666,3 +693,28 @@ confirmed the JSON itself was clean UTF-8 -- the mangling was a Windows
 terminal display artifact from piping through `python -m json.tool`, not
 an encoding bug in the ingestion service or the LLM response. 75
 ingestion tests pass (up from 67).
+
+Also during this phase: the classifier's `ANTHROPIC_CLASSIFY_MODEL`
+turned out to have never been wired into `docker-compose.yml` (only the
+ingestion service's advisory model was) -- fixed. Separately, both LLM
+call sites (`llm_fallback.py`, `advisory.py`) were silently swallowing
+API errors with a bare `except: return None`, discovered when trying an
+older/cheaper Haiku model (`claude-3-5-haiku-20241022`) that turned out
+to be retired -- both features failed with zero trace in the logs.
+Added proper warning-level logging with the actual HTTP status/response
+body on failure, confirmed live: reverted to the working model
+(`claude-haiku-4-5-20251001`, still Anthropic's cheapest current model --
+there wasn't actually a lower tier to switch to) and confirmed advisory
+generation works again.
+
+### Stage 2, Phase H (Fault Taxonomy page: live data, filtering, methodology)
+
+Reworked `/taxonomy` per section 17 -- entirely a frontend change, no
+new backend endpoints (reused `/v1/stats/category-counts` and the
+existing `/v1/taxonomy`). Validated live: confirmed the 30-day
+occurrence count endpoint correctly returned real accumulated data (1 of
+27 subcategories with any occurrences, 53 total for "Tool Result
+Propagation" -- matching exactly what earlier phases' demo traffic had
+produced) and the page serves 200. `npm run build` passes (~69KB
+gzipped, still zero new dependencies). No ingestion test count change
+(no backend logic touched) -- 75 ingestion tests still pass.

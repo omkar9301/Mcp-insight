@@ -7,11 +7,14 @@ asks it to pick the best-matching subcategory. Optional -- if
 ANTHROPIC_API_KEY isn't set, callers just keep the TF-IDF result.
 """
 import json
+import logging
 import os
 
 import httpx
 
 from .taxonomy_data import TAXONOMY, dominant
+
+_log = logging.getLogger("mcp_insight.classifier.llm_fallback")
 
 _API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 _MODEL = os.environ.get("ANTHROPIC_CLASSIFY_MODEL", "claude-haiku-4-5-20251001")
@@ -54,6 +57,10 @@ async def classify_with_llm(text: str) -> dict | None:
             picked = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
             row = _BY_KEY.get((picked["category"], picked["subcategory"]))
             if row is None:
+                _log.warning(
+                    "llm_fallback_unmatched_pick",
+                    extra={"picked": picked},
+                )
                 return None
             return {
                 "category": row["category"],
@@ -64,5 +71,15 @@ async def classify_with_llm(text: str) -> dict | None:
                 "practitioner_confirmed_pct": row["confirmed_pct"],
                 "source": "llm",
             }
+    except httpx.HTTPStatusError as e:
+        # Surfaces exactly the failure mode that bit us during testing: a
+        # misconfigured/invalid ANTHROPIC_CLASSIFY_MODEL fails silently
+        # into the TF-IDF-only path with zero trace unless this is logged.
+        _log.warning(
+            "llm_fallback_http_error",
+            extra={"status_code": e.response.status_code, "model": _MODEL, "body": e.response.text[:300]},
+        )
+        return None
     except Exception:
+        _log.warning("llm_fallback_failed", exc_info=True, extra={"model": _MODEL})
         return None
