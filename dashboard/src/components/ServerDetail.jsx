@@ -6,6 +6,8 @@ import Sparkline from "./Sparkline.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import Heatmap from "./charts/Heatmap.jsx";
 import AdvisoryPanel from "./AdvisoryPanel.jsx";
+import RetrievalQualityPanel from "./RetrievalQualityPanel.jsx";
+import InjectionEventsPanel from "./InjectionEventsPanel.jsx";
 
 const METRIC_HELP = {
   errorRate: "Fraction of tool/method calls that returned a JSON-RPC error object in the window.",
@@ -47,10 +49,12 @@ export default function ServerDetail() {
   const [heatmap, setHeatmap] = useState(null);
   const [feedbackGiven, setFeedbackGiven] = useState({});
   const [tools, setTools] = useState(null);
+  const [retrievalTools, setRetrievalTools] = useState(null);
+  const [injectionEvents, setInjectionEvents] = useState(null);
 
   async function load() {
     try {
-      const [h, a, e, ts, al, hm, tl] = await Promise.all([
+      const [h, a, e, ts, al, hm, tl, rt, ie] = await Promise.all([
         ingestionApi.getHealth(serverId, 60),
         ingestionApi.getAnomalies(serverId, 15),
         ingestionApi.getEvents(serverId, { onlyFaults, limit: 50 }),
@@ -58,6 +62,8 @@ export default function ServerDetail() {
         ingestionApi.getAlertHistory(serverId, 20),
         ingestionApi.getHeatmap(serverId, 168),
         ingestionApi.getServerTools(serverId),
+        ingestionApi.getServerRetrievalTools(serverId, 1440),
+        ingestionApi.getServerInjectionEvents(serverId, 50),
       ]);
       setHealth(h);
       setAnomalies(a);
@@ -66,6 +72,8 @@ export default function ServerDetail() {
       setAlertHistory(al.alerts);
       setHeatmap(hm.cells);
       setTools(tl.tools);
+      setRetrievalTools(rt.tools);
+      setInjectionEvents(ie.events);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -218,6 +226,14 @@ export default function ServerDetail() {
             </table>
           )}
         </div>
+      )}
+
+      {retrievalTools && retrievalTools.length > 0 && (
+        <RetrievalQualityPanel rows={retrievalTools} title="Retrieval tool quality (30d)" />
+      )}
+
+      {injectionEvents && injectionEvents.length > 0 && (
+        <InjectionEventsPanel events={injectionEvents} title="Prompt injection signals (security)" />
       )}
 
       {timeseries && timeseries.some((b) => b.total_calls > 0) && (

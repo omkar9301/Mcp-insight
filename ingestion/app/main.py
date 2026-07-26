@@ -10,9 +10,10 @@ from .alerting import aclose_client as aclose_alerting_client
 from .classifier_client import aclose_client as aclose_classifier_client
 from .config import settings
 from .db import ensure_indexes
+from .injection_llm import aclose_client as aclose_injection_llm_client
 from .logging_config import RequestLoggingMiddleware, configure_logging
 from .metrics_prom import PrometheusMiddleware, metrics_endpoint
-from .routes import advisory, alerts, events, feedback, health, keys, stats
+from .routes import advisory, alerts, events, feedback, health, injection, keys, retrieval, stats
 
 configure_logging()
 
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
     await aclose_classifier_client()
     await aclose_alerting_client()
     await aclose_advisory_client()
+    await aclose_injection_llm_client()
 
 
 app = FastAPI(title="MCP Insight Ingestion API", lifespan=lifespan)
@@ -44,6 +46,8 @@ app.include_router(alerts.router, tags=["alerts"])
 app.include_router(stats.router, tags=["stats"])
 app.include_router(feedback.router, tags=["feedback"])
 app.include_router(advisory.router, tags=["advisory"])
+app.include_router(retrieval.router, tags=["retrieval"])
+app.include_router(injection.router, tags=["injection"])
 
 app.add_api_route("/metrics", metrics_endpoint, methods=["GET"])
 

@@ -25,6 +25,16 @@ class RawEvent(BaseModel):
     num_connections: Optional[int] = None
     # server_capabilities fields
     tools: Optional[list[dict]] = None
+    # retrieval-tool quality signal (rpc_call events for tools that look
+    # like vector/RAG retrieval -- see wrapper's retrieval_signals.py)
+    tool_name: Optional[str] = None
+    retrieval: Optional[dict] = None
+    # prompt-injection signal (taxonomy category 28, kept separate from
+    # the 27 functional-fault categories) -- see wrapper's
+    # prompt_injection.py. Present either standalone on a
+    # prompt_injection_alert event (tool description source) or attached
+    # to an rpc_call event (result/error source).
+    prompt_injection: Optional[dict] = None
 
 
 class EventBatch(BaseModel):

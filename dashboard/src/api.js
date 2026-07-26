@@ -111,6 +111,19 @@ export const ingestionApi = {
     request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/events/${ts}/advisory?force=${force}`, {
       method: "POST",
     }),
+  getServerRetrievalTools: (serverId, windowMinutes = 1440) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/servers/${encodeURIComponent(serverId)}/retrieval-tools?window_minutes=${windowMinutes}`
+    ),
+  getFleetRetrievalTools: (windowMinutes = 1440) =>
+    request(getSettings().ingestionUrl, `/v1/retrieval-tools?window_minutes=${windowMinutes}`),
+  getServerInjectionEvents: (serverId, limit = 50) =>
+    request(getSettings().ingestionUrl, `/v1/servers/${encodeURIComponent(serverId)}/prompt-injection-events?limit=${limit}`),
+  getInjectionSummary: (windowMinutes = 43200) =>
+    request(getSettings().ingestionUrl, `/v1/stats/prompt-injection-summary?window_minutes=${windowMinutes}`),
+  getFleetInjectionEvents: (limit = 50) =>
+    request(getSettings().ingestionUrl, `/v1/events/prompt-injection?limit=${limit}`),
 };
 
 export const classifierApi = {

@@ -7,6 +7,7 @@ import DonutChart from "./charts/DonutChart.jsx";
 import BarChart from "./charts/BarChart.jsx";
 import SeverityBars from "./charts/SeverityBars.jsx";
 import Sparkline from "./Sparkline.jsx";
+import RetrievalQualityPanel from "./RetrievalQualityPanel.jsx";
 import { STATUS_BORDER_COLOR, formatRelativeTime, statusRank } from "../utils.js";
 
 const STATUS_OPTIONS = ["all", "critical", "unhealthy", "degraded", "healthy", "idle"];
@@ -37,6 +38,7 @@ export default function ServerList() {
   const [healthDist, setHealthDist] = useState(null);
   const [severityBreakdown, setSeverityBreakdown] = useState(null);
   const [categoryCounts, setCategoryCounts] = useState(null);
+  const [retrievalTools, setRetrievalTools] = useState(null);
   const [alertingStatus, setAlertingStatus] = useState(null);
   const [lowConfidence, setLowConfidence] = useState(null);
   const [prevSnapshot, setPrevSnapshot] = useState(null);
@@ -53,7 +55,7 @@ export default function ServerList() {
 
   async function load() {
     try {
-      const [data, hd, sb, cc, alertStatus, lowConf, snap] = await Promise.all([
+      const [data, hd, sb, cc, alertStatus, lowConf, snap, rt] = await Promise.all([
         ingestionApi.listServers(),
         ingestionApi.getHealthDistribution(),
         ingestionApi.getSeverityBreakdown(),
@@ -61,6 +63,7 @@ export default function ServerList() {
         ingestionApi.getAlertingStatus(),
         ingestionApi.getLowConfidenceCount(),
         ingestionApi.getFleetSnapshot(24),
+        ingestionApi.getFleetRetrievalTools(1440),
       ]);
       setServers(data.servers || []);
       setHealthDist(hd.counts);
@@ -69,6 +72,7 @@ export default function ServerList() {
       setAlertingStatus(alertStatus);
       setLowConfidence(lowConf);
       setPrevSnapshot(snap.snapshot);
+      setRetrievalTools(rt.rows.slice(0, 10));
       setError(null);
 
       const entries = await Promise.all(
@@ -337,6 +341,10 @@ export default function ServerList() {
           </h3>
           <BarChart data={categoryCounts} labelKey="subcategory" valueKey="count" color="var(--accent)" />
         </div>
+      )}
+
+      {retrievalTools && retrievalTools.length > 0 && (
+        <RetrievalQualityPanel rows={retrievalTools} showServerColumn title="Retrieval tool quality, fleet-wide (30d, top 10 by empty rate)" />
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, flexWrap: "wrap", gap: 10 }}>

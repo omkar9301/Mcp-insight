@@ -117,3 +117,33 @@ async def maybe_alert_anomalies(server_id: str, anomaly_report: dict) -> None:
     ALERTS_SENT.labels(kind="anomaly").inc()
     await _record_alert(server_id, "anomaly", text)
     await _send_slack(text)
+
+
+async def maybe_alert_injection(server_id: str, tool_name: str, signal: dict) -> None:
+    """Alerts on a prompt-injection signal regardless of LLM confirmation
+    -- even an unconfirmed keyword/structural hit is worth a human
+    glance, LLM confirmation (if configured) just adds confidence
+    context to the message. Respects the same per-server mute as
+    health/anomaly alerts for consistency, even though a security signal
+    arguably deserves its own channel -- keeping one mute mechanism
+    rather than a second, separate one for now."""
+    if await _is_muted(server_id):
+        return
+    if not await _cooldown_ok(server_id, "prompt_injection"):
+        return
+
+    subtypes = ", ".join(signal.get("subtypes") or []) or "structural anomaly"
+    llm = signal.get("llm_confirmation")
+    llm_line = ""
+    if llm:
+        verdict = "confirmed" if llm.get("confirmed") else "not confirmed"
+        llm_line = f"\n  - LLM review: {verdict} ({llm.get('confidence', 'unknown')} confidence) -- {llm.get('reasoning', '')}"
+
+    text = (
+        f":rotating_light: *mcp-insight*: possible prompt injection on server `{server_id}`, "
+        f"tool `{tool_name}`\n  - subtypes: {subtypes}\n  - source: {signal.get('source_field', 'unknown')}"
+        f"\n  - preview: `{signal.get('preview', '')[:120]}`{llm_line}"
+    )
+    ALERTS_SENT.labels(kind="prompt_injection").inc()
+    await _record_alert(server_id, "prompt_injection", text)
+    await _send_slack(text)

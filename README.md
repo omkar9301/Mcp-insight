@@ -19,6 +19,8 @@ mcp-insight/
       schema_guard.py     captures tool schemas, validates results -> silent failures
       buffer.py           async, non-blocking, fail-open local event buffer
       metrics.py          process resource sidecar (CPU, memory, FDs, threads)
+      retrieval_signals.py  heuristic vector/RAG retrieval quality detection
+      prompt_injection.py    taxonomy-28 detection: keyword patterns + structural anomaly
     tests/               pytest unit tests
   ingestion/            FastAPI + MongoDB service
     app/
@@ -31,8 +33,11 @@ mcp-insight/
       health_scoring.py      weighted 0-100 health score engine
       anomaly.py              rolling z-score anomaly/trend detector + bucketed timeseries
       alerting.py              Slack webhook alerts, persisted cooldowns, history, mute
+      advisory.py              per-event AI root-cause analysis (optional LLM)
+      injection_llm.py          prompt-injection intent-confirmation escalation (optional LLM)
       routes/events.py, routes/health.py, routes/keys.py, routes/alerts.py,
-      routes/stats.py (aggregate rollups), routes/feedback.py (classification feedback)
+      routes/stats.py, routes/feedback.py, routes/advisory.py,
+      routes/retrieval.py, routes/injection.py
     tests/               pytest unit/integration tests
   classifier/            FastAPI service, TF-IDF + optional LLM fallback match
                           against the 27-category real MCP fault taxonomy
@@ -40,11 +45,15 @@ mcp-insight/
     tests/
   dashboard/             React + Vite SPA:
                           components/charts/  BarChart, DonutChart, StackedBar, Heatmap (no deps)
-                          Overview (KPIs+charts), ServerDetail (trend/heatmap/alerts/keys/feedback),
+                          Overview (KPIs+charts), ServerDetail, Security, Tool Registry,
                           Taxonomy + CategoryPage + TaxonomyDrilldown, SeverityPage, Settings
   deploy/
     demo_flaky_server.py   test MCP server with a baked-in ~20% silent-failure rate
     drive_demo.py            sends realistic traffic against the demo server
+    demo_retrieval_server.py  vector-search-shaped tool, ~30% empty results
+    drive_retrieval_demo.py    sends traffic against the retrieval demo server
+    demo_injection_server.py   simulated compromised server (malicious description + payloads)
+    drive_injection_demo.py     sends traffic against the injection demo server
   docker-compose.yml     mongo + ingestion + classifier + dashboard (dev-shaped)
   docker-compose.prod.yml  production overlay: no exposed mongo port, restart
                             policies, resource limits, multi-worker uvicorn
@@ -421,6 +430,106 @@ no connection to your actual data -- now:
   from data the existing `/v1/stats/category-counts` and
   `GET /v1/taxonomy` endpoints already returned.
 
+## 18. Retrieval tool quality (vector/RAG-style tools)
+
+**What the wrapper can and can't see, honestly**: it only ever observes
+MCP protocol traffic -- it has no visibility into whether a tool handler
+actually queried a vector DB internally. This feature is best-effort
+inference from the outside, not ground truth.
+
+The wrapper heuristically flags a tool as "retrieval-shaped" if its
+name/description matches common patterns (`search`, `retriev`, `lookup`,
+`query`, `embed`, `vector`, `similar`, `rag`, ...) **and** its result
+looks like a list of matches (a top-level list, or a `results` /
+`matches` / `documents` / `hits` field containing one). For those calls
+only, it extracts small summary numbers -- result count, and
+score/similarity min/max/avg if the items carry a `score`/`similarity`/
+`relevance` field -- never the raw retrieved content, consistent with
+this wrapper never shipping full tool payloads elsewhere.
+
+- `GET /v1/servers/{id}/retrieval-tools` -- per-server, per-tool summary:
+  call count, **empty-result rate** (the strongest signal here -- a
+  vector search silently returning nothing is invisible to schema
+  validation, since an empty list is still a perfectly valid response),
+  average/worst top score, average result count, average latency.
+- `GET /v1/retrieval-tools` -- fleet-wide, ranked by empty-result rate,
+  so the worst-behaving retrieval tool across your whole fleet surfaces
+  first.
+- Shown on both the server detail page and a top-10 fleet-wide panel on
+  Overview, via the shared `RetrievalQualityPanel` component.
+- `deploy/demo_retrieval_server.py` + `drive_retrieval_demo.py` -- a new
+  demo fixture with one `vector_search` tool that returns zero matches
+  ~30% of the time, for trying this out without a real vector DB.
+
+## 19. Prompt injection detection (taxonomy category 28)
+
+A malicious or compromised MCP server can embed instruction-like text
+anywhere in a tool `description`, a call `result`, or an `error.message`
+-- targeting the orchestrating LLM's interpretation layer, not the RPC
+transport. This is **category 28** in the fault taxonomy, kept
+deliberately separate from the 27 functional-fault categories (it's
+adversarial, not a fault -- mixing it into the fault-rate denominator
+would skew health scores). It never touches `compute_health_score` or
+`/v1/stats/category-counts`.
+
+**Passive tap only, by design decision**: the wrapper sits inline in the
+stdio path and technically could strip or block flagged content before
+it reaches the real client, but this feature only ever tags and reports.
+A false positive here must never be able to break a live tool call --
+every other feature in this system is observability, not intervention,
+and this one stays consistent with that.
+
+**Detection** (`wrapper/mcp_insight/prompt_injection.py`, all local, no
+network calls):
+- **Keyword patterns** for imperative language aimed at an AI
+  (`imperative_to_model`), fake system/admin role markers
+  (`role_authority_spoofing`), instructions to leak secrets/tokens/prior
+  context (`exfiltration_trigger`), and base64/zero-width/homoglyph/
+  markdown-comment obfuscation (`encoding_obfuscation`).
+- **Structural anomaly** (`structural_anomaly`): an online (Welford)
+  per-tool, per-field baseline of text length and Shannon entropy --
+  flags a result/error whose shape is a statistical outlier (|z| > 3)
+  against that field's *own* history, catching novel or obfuscated
+  payloads keyword matching alone would miss. Needs 20+ samples before
+  it activates.
+- **Error-channel coverage** (`error_channel_injection`): the same
+  keyword patterns run against `error.message`/`error.data` too, tagged
+  separately since error text is an underscanned vector in most
+  pipelines -- models tend to trust it implicitly when self-correcting.
+- **Precision gate**: requires 2+ independent pattern hits, or 1 hit
+  plus a structural anomaly, or a structural anomaly with no keyword hit
+  at all, before ever reporting a signal -- a single weak match (e.g. "you
+  must provide a valid file path" in an ordinary description) is too
+  common in legitimate text to report alone.
+- Only small derived signals are ever attached to an event (matched
+  subtype names, a 160-char preview, z-scores) -- never the full flagged
+  text, same privacy posture as `schema_violation`/`retrieval` elsewhere
+  in this wrapper.
+
+**LLM escalation** (ingestion service, optional, same `ANTHROPIC_API_KEY`
+as the classifier/advisory features): ambiguous signals -- a lone keyword
+hit, or a structural-only anomaly with no keyword match -- get sent to an
+LLM framed as *intent*-classification ("does this try to direct an AI
+assistant's behavior, not is this malicious" -- better precision per the
+reference spec). Signals with 2+ keyword hits already are strong enough
+that they're never escalated. Confirmation is persisted back onto the
+stored event.
+
+- `GET /v1/servers/{id}/prompt-injection-events`, `GET
+  /v1/events/prompt-injection` (fleet-wide), `GET
+  /v1/stats/prompt-injection-summary` -- counts by subtype and
+  confidence source, servers affected.
+- Alerts fire on every flagged signal regardless of LLM confirmation
+  (confirmation just adds confidence context to the message) -- its own
+  cooldown key, same mute mechanism as health/anomaly alerts.
+- New **Security** page in the sidebar (fleet-wide summary + subtype
+  chart + recent signals table) and a per-server panel via the shared
+  `InjectionEventsPanel` component.
+- `deploy/demo_injection_server.py` + `drive_injection_demo.py` -- a new
+  demo fixture simulating a compromised server: a malicious tool
+  description, plus a tool that occasionally injects payloads via its
+  result and error channels.
+
 ## Running tests
 
 Each service has its own virtualenv and test suite:
@@ -718,3 +827,86 @@ Propagation" -- matching exactly what earlier phases' demo traffic had
 produced) and the page serves 200. `npm run build` passes (~69KB
 gzipped, still zero new dependencies). No ingestion test count change
 (no backend logic touched) -- 75 ingestion tests still pass.
+
+### Stage 2, Phase I (Retrieval tool quality)
+
+Added `wrapper/mcp_insight/retrieval_signals.py` (heuristic detection +
+score/result-count extraction, never ships raw retrieved content),
+per-server and fleet-wide aggregate endpoints in ingestion, the shared
+`RetrievalQualityPanel` dashboard component, and a new demo fixture
+(`demo_retrieval_server.py` / `drive_retrieval_demo.py`) since the
+existing `demo_flaky_server.py` had no retrieval-shaped tool to
+demonstrate this against. Validated live end-to-end with real traffic,
+not just unit tests: drove 30 calls against the new demo's
+`vector_search` tool (which returns empty matches ~30% of the time by
+design) and confirmed both endpoints correctly computed a 23.3%
+empty-result rate, real average/worst similarity scores, and average
+result count -- matching the simulated failure rate. Confirmed both
+dashboard pages (Overview, server detail) serve 200 with the new panel
+wired in. 27 wrapper tests pass (up from 18, nine new: six for the
+signal-extraction heuristics, three for interceptor-level attachment/
+non-attachment), 79 ingestion tests pass (up from 75).
+
+Being upfront about the limits of this feature: it's inference from
+protocol traffic shape, not ground truth -- a tool that doesn't match
+the name/description heuristic, or whose output doesn't look like a
+result list, produces no signal at all, and a tool that happens to match
+the heuristic without actually being a retrieval tool would produce a
+misleading one. The real fix for full confidence here is the opt-in SDK
+hook already scoped in the architecture doc but not built -- see
+"What's NOT in this build."
+
+### Stage 2, Phase J (Prompt injection detection, taxonomy category 28)
+
+Built from a provided detection spec (patterns, taxonomy subtypes,
+pipeline wiring). Two scope decisions were locked in before starting,
+both per explicit direction: **passive tap only** (detect/log/alert,
+never strip or block, despite the wrapper sitting inline in the stdio
+path and technically being able to) and **LLM escalation lives in
+ingestion**, not the wrapper (keeps the wrapper local-only/zero-network-
+calls on the hot path).
+
+Added `wrapper/mcp_insight/prompt_injection.py` (regex pattern groups,
+Welford online per-tool/per-field length+entropy baselines, a 2+-hit-or-
+structural precision gate), wired into the interceptor at three points
+(tool description on capabilities capture, call result, error channel),
+`ingestion/app/injection_llm.py` (optional intent-classification
+escalation for ambiguous signals only), a `maybe_alert_injection` Slack
+alert path, three new endpoints, a new Security page + per-server panel,
+and a new demo fixture (`demo_injection_server.py`) simulating a
+compromised server.
+
+Two real bugs caught during test-writing, both fixed before this ever
+ran live:
+1. `scan_text`'s subtype list was deduplicated by category, so two
+   different patterns matching *within the same subtype* (e.g. "ignore
+   the previous instructions" + "you must now", both
+   `imperative_to_model`) counted as a single hit -- undercutting the
+   "2+ pattern hits" precision gate for exactly the strong, multi-pattern
+   signals it's supposed to let through. Fixed by gating on total raw
+   pattern-match count (`count_pattern_hits`), not deduplicated subtype
+   count.
+2. A test built a "baseline" of 25 byte-for-byte-identical samples,
+   which has zero variance -- a z-score against a zero-stddev baseline is
+   mathematically undefined, so no structural anomaly could ever fire.
+   Not a production bug (real traffic isn't perfectly uniform), but
+   exposed as a real edge case: `FieldBaseline.zscore` correctly returns
+   `None` rather than dividing by zero.
+
+Validated live against real adversarial traffic, not just unit tests:
+drove 20 calls through the injection demo (malicious tool description +
+a tool that injects via both result and error channels ~35% of the
+time). Confirmed exactly what was expected: the malicious description
+was flagged as its own `prompt_injection_alert` event (3 subtypes:
+imperative_to_model, role_authority_spoofing, exfiltration_trigger);
+result-channel payloads were tagged on their `rpc_call` events
+(imperative_to_model + exfiltration_trigger); error-channel payloads
+were tagged with the `error_channel_injection` coverage tag added
+correctly; none needed LLM escalation since all had 2+ keyword hits
+(escalation logic exercised separately in unit tests). Fleet summary
+endpoint correctly aggregated 13 total flagged signals across the
+subtypes; a Slack alert fired exactly once despite 13 flagged events
+(cooldown working as intended); both new dashboard routes serve 200.
+`npm run build` passes (~72KB gzipped, still zero new dependencies). 42
+wrapper tests pass (up from 27, fifteen new), 90 ingestion tests pass (up
+from 79, eleven new).

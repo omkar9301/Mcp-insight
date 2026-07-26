@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from .buffer import EventBuffer
 from .capture import CapturedMessage, PendingRequestTracker
+from .prompt_injection import PromptInjectionDetector
+from .retrieval_signals import extract_retrieval_signal
 from .schema_guard import SchemaGuard
 
 
@@ -20,7 +22,9 @@ class Interceptor:
         self.buffer = EventBuffer(ingestion_url=ingestion_url, server_id=server_id, api_key=api_key)
         self.tracker = PendingRequestTracker()
         self.schema_guard = SchemaGuard()
+        self.injection_detector = PromptInjectionDetector()
         self._last_tools_sent: dict | None = None
+        self._descriptions_scanned: set[str] = set()
 
     def handle_message(self, msg: CapturedMessage) -> None:
         if msg.parsed is None:
@@ -72,16 +76,46 @@ class Interceptor:
         if matched["is_error"]:
             event["error"] = matched["error"]
 
-        # Silent-failure check: only meaningful for tools/call results
-        if matched["method"] == "tools/call" and not matched["is_error"]:
+        tool_name = None
+        if matched["method"] == "tools/call":
             params = matched.get("params") or {}
             tool_name = params.get("name")
+
+        # Silent-failure check: only meaningful for tools/call results
+        if matched["method"] == "tools/call" and not matched["is_error"]:
             result = matched.get("result")
             if tool_name and result is not None:
                 violation = self.schema_guard.check_tool_result(tool_name, result)
                 if violation:
                     event["silent_failure"] = True
                     event["schema_violation"] = violation
+
+                # Best-effort vector/RAG retrieval quality signal -- only
+                # attached for tools that heuristically look like
+                # retrieval tools AND whose result looks like a result
+                # list; extracts small summary numbers only (never the
+                # raw retrieved content), same privacy posture as the
+                # rest of this wrapper.
+                tool_meta = self.schema_guard.tools.get(tool_name, {})
+                retrieval = extract_retrieval_signal(tool_name, tool_meta.get("description"), result)
+                if retrieval:
+                    event["retrieval"] = retrieval
+
+                injection = self.injection_detector.scan_call_result(tool_name, result)
+                if injection:
+                    event["prompt_injection"] = injection
+
+        # Prompt-injection scan of the error channel (28.5) -- run
+        # regardless of method, since error text is an underscanned
+        # vector in most pipelines and can appear on any call, not just
+        # tools/call.
+        if matched["is_error"]:
+            injection = self.injection_detector.scan_error(tool_name or matched["method"], matched["error"])
+            if injection:
+                event["prompt_injection"] = injection
+
+        if tool_name:
+            event["tool_name"] = tool_name
 
         self.buffer.put(event)
 
@@ -102,3 +136,27 @@ class Interceptor:
             "ts": ts,
             "tools": list(tools.values()),
         })
+        self._scan_tool_descriptions(tools, ts)
+
+    def _scan_tool_descriptions(self, tools: dict, ts: float) -> None:
+        """Scans every declared tool description for prompt-injection
+        patterns (28.1-28.3, 28.6) -- a malicious/compromised server can
+        embed instruction-like text in its own tool metadata, which an
+        orchestrating LLM may read as legitimate context. Scanned once
+        per distinct (name, description) pair, not on every capabilities
+        resend."""
+        for name, meta in tools.items():
+            description = meta.get("description")
+            key = f"{name}:{description}"
+            if key in self._descriptions_scanned:
+                continue
+            self._descriptions_scanned.add(key)
+
+            signal = self.injection_detector.scan_tool_description(name, description)
+            if signal:
+                self.buffer.put({
+                    "type": "prompt_injection_alert",
+                    "ts": ts,
+                    "tool_name": name,
+                    "prompt_injection": signal,
+                })

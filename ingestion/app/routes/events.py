@@ -4,12 +4,13 @@ import time
 
 from fastapi import APIRouter, Header
 
-from ..alerting import maybe_alert_anomalies, maybe_alert_health
+from ..alerting import maybe_alert_anomalies, maybe_alert_health, maybe_alert_injection
 from ..anomaly import detect_anomalies
 from ..auth import require_ingest_auth
 from ..classifier_client import classify_event
 from ..db import get_db
 from ..health_scoring import compute_health_score
+from ..injection_llm import confirm_injection_intent, should_escalate
 from ..metrics_prom import EVENTS_INGESTED, FAULTS_CLASSIFIED
 from ..models import EventBatch
 from ..rate_limit import enforce_ingest_rate_limit
@@ -74,6 +75,18 @@ async def ingest_events(batch: EventBatch, authorization: str | None = Header(de
     if docs:
         await db["events"].insert_many(docs)
 
+    # Best-effort prompt-injection escalation + alerting -- never blocks
+    # the ingest response. Runs after insert so the stored doc can be
+    # updated in place with the LLM's confirmation once it comes back.
+    for d in docs:
+        signal = d.get("prompt_injection")
+        if not signal:
+            continue
+        try:
+            await _process_injection_signal(batch.server_id, d, signal)
+        except Exception:
+            pass
+
     # Best-effort health scoring + anomaly detection + alerting on every
     # ingest, scoped to this batch's server. Never blocks/fails the ingest
     # response -- observability plumbing must not become a new source of
@@ -84,6 +97,27 @@ async def ingest_events(batch: EventBatch, authorization: str | None = Header(de
         pass
 
     return {"accepted": len(docs), "dropped_reported": batch.dropped_since_last_flush}
+
+
+async def _process_injection_signal(server_id: str, doc: dict, signal: dict) -> None:
+    """Escalates ambiguous prompt-injection signals to an LLM for intent
+    confirmation (if configured), persists the confirmation back onto the
+    stored event, and always alerts -- an unconfirmed keyword/structural
+    hit is still worth a human glance, LLM confirmation just adds
+    confidence context."""
+    db = get_db()
+    tool_name = doc.get("tool_name", "unknown")
+
+    if should_escalate(signal):
+        confirmation = await confirm_injection_intent(signal)
+        if confirmation:
+            signal = {**signal, "llm_confirmation": confirmation}
+            await db["events"].update_one(
+                {"server_id": server_id, "ts": doc["ts"]},
+                {"$set": {"prompt_injection": signal}},
+            )
+
+    await maybe_alert_injection(server_id, tool_name, signal)
 
 
 async def _score_and_alert(server_id: str, window_minutes: int = 60) -> None:
