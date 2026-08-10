@@ -124,6 +124,15 @@ export const ingestionApi = {
     request(getSettings().ingestionUrl, `/v1/stats/prompt-injection-summary?window_minutes=${windowMinutes}`),
   getFleetInjectionEvents: (limit = 50) =>
     request(getSettings().ingestionUrl, `/v1/events/prompt-injection?limit=${limit}`),
+  getServerLostInMiddle: (serverId, windowMinutes = 1440) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/servers/${encodeURIComponent(serverId)}/lost-in-middle?window_minutes=${windowMinutes}`
+    ),
+  getLostInMiddleSummary: (windowMinutes = 43200) =>
+    request(getSettings().ingestionUrl, `/v1/stats/lost-in-middle-summary?window_minutes=${windowMinutes}`),
+  getFleetLostInMiddleEvents: (limit = 50) =>
+    request(getSettings().ingestionUrl, `/v1/events/lost-in-middle?limit=${limit}`),
 };
 
 export const classifierApi = {

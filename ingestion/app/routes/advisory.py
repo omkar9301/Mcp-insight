@@ -4,7 +4,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..advisory import generate_advisory
+from ..advisory import generate_advisory, generate_litm_advisory
 from ..auth import require_api_key
 from ..config import settings
 from ..db import get_db
@@ -35,7 +35,14 @@ async def get_advisory(server_id: str, ts: float, force: bool = Query(False)):
     if not force and event.get("ai_advisory"):
         return {"configured": True, "advisory": event["ai_advisory"], "cached": True}
 
-    advisory = await generate_advisory(event)
+    # Lost-in-the-middle signals get the specialized deep-dive advisory
+    # (when/where/how/why + named industry-standard prevention
+    # techniques) instead of the generic MCP-fault one -- a different
+    # domain (retrieval/context pipeline) needs a different report shape.
+    if event.get("lost_in_middle"):
+        advisory = await generate_litm_advisory(event)
+    else:
+        advisory = await generate_advisory(event)
     if advisory is None:
         raise HTTPException(status_code=502, detail="Advisory generation failed -- try again")
 

@@ -8,6 +8,7 @@ import BarChart from "./charts/BarChart.jsx";
 import SeverityBars from "./charts/SeverityBars.jsx";
 import Sparkline from "./Sparkline.jsx";
 import RetrievalQualityPanel from "./RetrievalQualityPanel.jsx";
+import { RISK_INFO } from "./LostInMiddlePanel.jsx";
 import { STATUS_BORDER_COLOR, formatRelativeTime, statusRank } from "../utils.js";
 
 const STATUS_OPTIONS = ["all", "critical", "unhealthy", "degraded", "healthy", "idle"];
@@ -39,6 +40,7 @@ export default function ServerList() {
   const [severityBreakdown, setSeverityBreakdown] = useState(null);
   const [categoryCounts, setCategoryCounts] = useState(null);
   const [retrievalTools, setRetrievalTools] = useState(null);
+  const [litmSummary, setLitmSummary] = useState(null);
   const [alertingStatus, setAlertingStatus] = useState(null);
   const [lowConfidence, setLowConfidence] = useState(null);
   const [prevSnapshot, setPrevSnapshot] = useState(null);
@@ -55,7 +57,7 @@ export default function ServerList() {
 
   async function load() {
     try {
-      const [data, hd, sb, cc, alertStatus, lowConf, snap, rt] = await Promise.all([
+      const [data, hd, sb, cc, alertStatus, lowConf, snap, rt, lm] = await Promise.all([
         ingestionApi.listServers(),
         ingestionApi.getHealthDistribution(),
         ingestionApi.getSeverityBreakdown(),
@@ -64,6 +66,7 @@ export default function ServerList() {
         ingestionApi.getLowConfidenceCount(),
         ingestionApi.getFleetSnapshot(24),
         ingestionApi.getFleetRetrievalTools(1440),
+        ingestionApi.getLostInMiddleSummary(43200),
       ]);
       setServers(data.servers || []);
       setHealthDist(hd.counts);
@@ -73,6 +76,7 @@ export default function ServerList() {
       setLowConfidence(lowConf);
       setPrevSnapshot(snap.snapshot);
       setRetrievalTools(rt.rows.slice(0, 10));
+      setLitmSummary(lm);
       setError(null);
 
       const entries = await Promise.all(
@@ -345,6 +349,29 @@ export default function ServerList() {
 
       {retrievalTools && retrievalTools.length > 0 && (
         <RetrievalQualityPanel rows={retrievalTools} showServerColumn title="Retrieval tool quality, fleet-wide (30d, top 10 by empty rate)" />
+      )}
+
+      {litmSummary && litmSummary.total_flagged > 0 && (
+        <div className="panel">
+          <h3>
+            ⚠️ Lost in the Middle -- context risk, fleet-wide (30d)
+            <InfoTooltip text="'Lost in the Middle' is a documented LLM failure mode: given a lot of context, models tend to pay less attention to information buried in the middle, even though it's technically present. Not a claim the downstream LLM actually lost context -- this platform can't see the model's attention -- these are known RISK FACTORS from the research: oversized/unranked retrieval results, statistical size outliers vs. a tool's own history, and repeated queries shortly after a large prior result. Check a server's detail page for per-tool breakdown." />
+          </h3>
+          <p style={{ fontSize: 13, color: "var(--text-dim)" }}>
+            {litmSummary.total_flagged} flagged calls across {litmSummary.servers_affected} server
+            {litmSummary.servers_affected === 1 ? "" : "s"} returned context in a shape known to raise
+            lost-in-the-middle risk.
+          </p>
+          <BarChart
+            data={Object.entries(litmSummary.risk_factor_counts || {}).map(([factor, count]) => ({
+              factor: RISK_INFO[factor]?.label || factor,
+              count,
+            }))}
+            labelKey="factor"
+            valueKey="count"
+            color="var(--degraded)"
+          />
+        </div>
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, flexWrap: "wrap", gap: 10 }}>

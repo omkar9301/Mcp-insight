@@ -159,7 +159,18 @@ async def recent_events(server_id: str, limit: int = Query(50, ge=1, le=500), on
     db = get_db()
     query: dict = {"server_id": server_id}
     if only_faults:
-        query["$or"] = [{"is_error": True}, {"silent_failure": True}, {"type": "protocol_violation"}]
+        # "Faults" here also covers risk signals that aren't classic
+        # error/silent-failure/protocol-violation faults -- a lost-in-
+        # the-middle or prompt-injection flag is exactly the kind of
+        # thing this filter exists to surface, not something a reader
+        # should have to un-filter to find.
+        query["$or"] = [
+            {"is_error": True},
+            {"silent_failure": True},
+            {"type": "protocol_violation"},
+            {"lost_in_middle": {"$exists": True}},
+            {"prompt_injection": {"$exists": True}},
+        ]
 
     cursor = db["events"].find(query, {"_id": 0}).sort("ts", -1).limit(limit)
     events = [doc async for doc in cursor]

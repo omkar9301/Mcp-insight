@@ -33,7 +33,9 @@ def looks_like_retrieval_tool(tool_name: str, description: Optional[str]) -> boo
     return bool(_RETRIEVAL_NAME_PATTERN.search(haystack))
 
 
-def _find_result_list(result: Any) -> Optional[list]:
+def find_result_list(result: Any) -> Optional[list]:
+    """Public: also used by lost_in_middle.py to look at result-set shape
+    (count, score ordering) without re-implementing this detection."""
     if isinstance(result, list):
         return result
     if isinstance(result, dict):
@@ -44,7 +46,7 @@ def _find_result_list(result: Any) -> Optional[list]:
     return None
 
 
-def _extract_scores(items: list) -> list[float]:
+def extract_scores(items: list) -> list[float]:
     scores: list[float] = []
     for item in items:
         if not isinstance(item, dict):
@@ -69,13 +71,13 @@ def extract_retrieval_signal(tool_name: str, description: Optional[str], result:
     if not looks_like_retrieval_tool(tool_name, description):
         return None
 
-    items = _find_result_list(result)
+    items = find_result_list(result)
     if items is None:
         return None
 
     signal: dict = {"result_count": len(items), "empty": len(items) == 0}
 
-    scores = _extract_scores(items)
+    scores = extract_scores(items)
     if scores:
         signal["top_score"] = max(scores)
         signal["avg_score"] = sum(scores) / len(scores)

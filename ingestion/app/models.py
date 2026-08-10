@@ -35,6 +35,10 @@ class RawEvent(BaseModel):
     # prompt_injection_alert event (tool description source) or attached
     # to an rpc_call event (result/error source).
     prompt_injection: Optional[dict] = None
+    # lost-in-the-middle risk signal (rpc_call events) -- see wrapper's
+    # lost_in_middle.py. Risk factors only, never a claim that the
+    # downstream LLM actually lost context.
+    lost_in_middle: Optional[dict] = None
 
 
 class EventBatch(BaseModel):

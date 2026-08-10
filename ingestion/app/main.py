@@ -13,7 +13,7 @@ from .db import ensure_indexes
 from .injection_llm import aclose_client as aclose_injection_llm_client
 from .logging_config import RequestLoggingMiddleware, configure_logging
 from .metrics_prom import PrometheusMiddleware, metrics_endpoint
-from .routes import advisory, alerts, events, feedback, health, injection, keys, retrieval, stats
+from .routes import advisory, alerts, events, feedback, health, injection, keys, lost_in_middle, retrieval, stats
 
 configure_logging()
 
@@ -48,6 +48,7 @@ app.include_router(feedback.router, tags=["feedback"])
 app.include_router(advisory.router, tags=["advisory"])
 app.include_router(retrieval.router, tags=["retrieval"])
 app.include_router(injection.router, tags=["injection"])
+app.include_router(lost_in_middle.router, tags=["lost_in_middle"])
 
 app.add_api_route("/metrics", metrics_endpoint, methods=["GET"])
 

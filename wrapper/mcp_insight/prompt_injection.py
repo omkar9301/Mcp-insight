@@ -129,6 +129,10 @@ class FieldBaseline:
         self._m2 += delta * delta2
 
     @property
+    def mean(self) -> float:
+        return self._mean
+
+    @property
     def stddev(self) -> float:
         if self.n < 2:
             return 0.0

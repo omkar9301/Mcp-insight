@@ -29,6 +29,7 @@ async def ensure_indexes() -> None:
     await events.create_index([("classification.category", 1), ("classification.subcategory", 1), ("ts", -1)])
     await events.create_index([("tool_name", 1), ("ts", -1)], sparse=True)
     await events.create_index([("prompt_injection", 1), ("ts", -1)], sparse=True)
+    await events.create_index([("lost_in_middle", 1), ("ts", -1)], sparse=True)
     await events.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 30)  # 30-day default retention
 
     servers = db["servers"]

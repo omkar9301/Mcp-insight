@@ -178,3 +178,39 @@ def test_prompt_injection_signal_attached_from_error_channel():
     events = list(interceptor.buffer._queue)
     rpc_events = [e for e in events if e["type"] == "rpc_call" and e.get("method") == "tools/call"]
     assert "error_channel_injection" in rpc_events[0]["prompt_injection"]["subtypes"]
+
+
+def test_lost_in_middle_signal_attached_for_large_retrieval_result():
+    interceptor = Interceptor(server_id="s1", ingestion_url="http://unreachable.invalid", api_key="")
+    _feed(interceptor, "client_to_server", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    _feed(interceptor, "server_to_client", {
+        "jsonrpc": "2.0", "id": 1,
+        "result": {"tools": [{"name": "vector_search", "description": "Searches the vector index"}]},
+    })
+
+    _feed(interceptor, "client_to_server", {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "vector_search", "arguments": {"q": "hello"}},
+    })
+    items = [{"text": f"chunk-{i}", "score": 0.9 - i * 0.01} for i in range(20)]
+    _feed(interceptor, "server_to_client", {"jsonrpc": "2.0", "id": 2, "result": {"matches": items}})
+
+    events = list(interceptor.buffer._queue)
+    rpc_events = [e for e in events if e["type"] == "rpc_call" and e.get("method") == "tools/call"]
+    assert "large_result_set" in rpc_events[0]["lost_in_middle"]["risk_factors"]
+
+
+def test_no_lost_in_middle_signal_for_ordinary_small_call():
+    interceptor = Interceptor(server_id="s1", ingestion_url="http://unreachable.invalid", api_key="")
+    _feed(interceptor, "client_to_server", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    _feed(interceptor, "server_to_client", {"jsonrpc": "2.0", "id": 1, "result": INIT_RESULT_WITH_TOOLS})
+
+    _feed(interceptor, "client_to_server", {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "add_numbers", "arguments": {"a": 1, "b": 2}},
+    })
+    _feed(interceptor, "server_to_client", {"jsonrpc": "2.0", "id": 2, "result": {"sum": 3}})
+
+    events = list(interceptor.buffer._queue)
+    rpc_events = [e for e in events if e["type"] == "rpc_call" and e.get("method") == "tools/call"]
+    assert "lost_in_middle" not in rpc_events[0]

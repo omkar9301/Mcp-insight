@@ -21,6 +21,7 @@ mcp-insight/
       metrics.py          process resource sidecar (CPU, memory, FDs, threads)
       retrieval_signals.py  heuristic vector/RAG retrieval quality detection
       prompt_injection.py    taxonomy-28 detection: keyword patterns + structural anomaly
+      lost_in_middle.py       LITM risk factors: oversized/unranked results, repeated queries
     tests/               pytest unit tests
   ingestion/            FastAPI + MongoDB service
     app/
@@ -37,7 +38,7 @@ mcp-insight/
       injection_llm.py          prompt-injection intent-confirmation escalation (optional LLM)
       routes/events.py, routes/health.py, routes/keys.py, routes/alerts.py,
       routes/stats.py, routes/feedback.py, routes/advisory.py,
-      routes/retrieval.py, routes/injection.py
+      routes/retrieval.py, routes/injection.py, routes/lost_in_middle.py
     tests/               pytest unit/integration tests
   classifier/            FastAPI service, TF-IDF + optional LLM fallback match
                           against the 27-category real MCP fault taxonomy
@@ -530,6 +531,45 @@ stored event.
   description, plus a tool that occasionally injects payloads via its
   result and error channels.
 
+## 20. Lost-in-the-middle risk detection
+
+**What this can and can't honestly claim**: the wrapper has zero
+visibility into the downstream LLM's attention or reasoning -- it cannot
+prove a model actually missed something buried in a long context. What
+it *can* detect, from protocol traffic alone, are the conditions the
+research literature ties to "lost in the middle" degradation:
+
+- **Oversized/unranked retrieval results** (`large_result_set`,
+  `unranked_results`) -- for tools that heuristically look like
+  retrieval (reuses `looks_like_retrieval_tool` from the retrieval
+  quality feature, section 18): flags result sets over 15 items, and
+  flags when the items aren't sorted by score descending -- both
+  documented contributors to degraded long-context accuracy.
+- **Size outliers** (`size_outlier`) -- an online per-tool baseline
+  (same Welford/z-score approach as prompt injection's structural
+  anomaly check, reusing `FieldBaseline`) flags a result whose size is a
+  statistical outlier vs. that tool's own history.
+- **Repeated queries after a large prior result**
+  (`repeated_query_after_large_context`) -- the same tool called again
+  with the same arguments within 5 minutes of a prior large result is a
+  real, protocol-visible signal the first answer likely wasn't used
+  effectively (could be LITM, poor ranking, or something else entirely
+  -- reported as a risk factor, not a diagnosis).
+
+Approximate token counts (`len(text) / 4`, a standard rough heuristic
+for English) are attached alongside risk factors so oversized-context
+calls are visible even before they cross any threshold.
+
+- `GET /v1/servers/{id}/lost-in-middle` -- per-tool flagged-call counts
+  and risk-factor breakdown. `GET /v1/stats/lost-in-middle-summary` --
+  fleet-wide. `GET /v1/events/lost-in-middle` -- raw flagged events.
+- Per-server panel (`LostInMiddlePanel`) on the server detail page, plus
+  a fleet-wide risk-factor chart on Overview.
+- Validated live with a purpose-built fixture returning 25 unranked
+  matches: correctly flagged `large_result_set` + `unranked_results` on
+  both calls, and `repeated_query_after_large_context` on the second
+  identical query -- exactly as designed, not just passing unit tests.
+
 ## Running tests
 
 Each service has its own virtualenv and test suite:
@@ -910,3 +950,87 @@ subtypes; a Slack alert fired exactly once despite 13 flagged events
 `npm run build` passes (~72KB gzipped, still zero new dependencies). 42
 wrapper tests pass (up from 27, fifteen new), 90 ingestion tests pass (up
 from 79, eleven new).
+
+### Stage 2, Phase K (Lost-in-the-middle risk detection)
+
+Reused rather than duplicated: `find_result_list`/`extract_scores` from
+`retrieval_signals.py` were made public so `lost_in_middle.py` could
+reuse them for result-set shape checks, and `FieldBaseline` from
+`prompt_injection.py` (gained a public `.mean` property) is reused
+directly for the size-outlier baseline rather than a second
+implementation of the same Welford tracker.
+
+Added `wrapper/mcp_insight/lost_in_middle.py`, wired into the
+interceptor alongside the existing retrieval/injection checks on every
+`tools/call` result, three ingestion endpoints, a per-server
+`LostInMiddlePanel` plus a fleet-wide risk-factor chart on Overview.
+
+Validated live with a purpose-built fixture (not committed to
+`deploy/`, since it exists solely to exercise this one feature) whose
+search tool returns 25 unranked matches: confirmed `large_result_set`
+and `unranked_results` both fired on the first call, and
+`repeated_query_after_large_context` correctly fired on a second
+identical query issued right after -- exactly the three risk factors
+this feature claims to detect, each confirmed with real data rather
+than only unit-test data. 52 wrapper tests pass (up from 42, eight new
+plus two new interceptor-level tests), 95 ingestion tests pass (up from
+90, five new).
+
+### Stage 2, Phase K.1 (Lost-in-the-middle: explicit labeling + deep-dive advisory)
+
+Initial LITM labeling was too subtle: individual risk-factor chips
+("large result set", "unranked results") never actually said "Lost in
+the Middle" anywhere, so a reader skimming the events table had no way
+to connect them to the concept. Fixed by centralizing every risk-factor
+label in an exported `RISK_INFO` map (`LostInMiddlePanel.jsx`) with
+`"Lost in the Middle: ..."`-prefixed labels and a detailed tooltip per
+factor, reused by both the per-server panel and the fleet-wide
+Overview chart, and by giving both panel headers a leading ⚠️ icon.
+
+The existing generic AI Advisory (summary/root_cause/solution) wasn't
+detailed enough for LITM specifically -- asked for it to be scaled up
+to when/where/how/why plus concrete, named prevention techniques.
+Rather than stretch the generic prompt/response shape to fit, added a
+separate `generate_litm_advisory()` pipeline in `advisory.py`: a
+dedicated prompt grounded in Liu et al. (TACL 2023/2024) that returns
+`when`/`where` (pipeline layer: retrieval-ranking, context assembly,
+etc.)/`how` (mechanism, referencing the U-shaped attention curve)/`why`
+(root cause)/`prevention` (4-8 named techniques -- cross-encoder
+reranking, top-k reduction, MMR, LITM-aware reordering, score
+thresholding, hybrid search, RAGAS/TruLens evaluation)/
+`industry_references`. `routes/advisory.py` now dispatches to this
+generator instead of the generic one whenever the flagged event has
+`lost_in_middle` set; `AdvisoryPanel.jsx` gained a matching
+`kind === "lost_in_middle"` render branch. `health.py`'s `only_faults`
+filter was also missing `lost_in_middle`/`prompt_injection` events
+(they're ordinary successful `rpc_call` events, not classic
+error/silent-failure/protocol-violation faults) -- fixed so the
+"faults only" checkbox doesn't hide them.
+
+Two real bugs found and fixed via live validation against the running
+stack, not caught by unit tests until reproduced from the actual
+failure:
+
+- **JSON parsing fragility**: the original `json.loads(raw[raw.index("{")
+  : raw.rindex("}") + 1])` assumed the first `{` and last `}` in the LLM
+  response bound the object -- broke on the LITM response's longer,
+  multi-array shape (`JSONDecodeError` on live `demo-litm` data). Fixed
+  with a proper `_extract_json()` helper (direct parse -> markdown-fence
+  strip -> string-aware brace-balance scan that tracks quote/escape
+  state so braces inside string values don't confuse it), covered by 6
+  new dedicated tests and reused by the generic advisory path too.
+- **Timeout too short**: the LITM prompt asks for up to 2200 output
+  tokens (vs. 1000 for the generic advisory) and real generation
+  exceeded the client's fixed 20s httpx timeout (`httpx.ReadTimeout` on
+  retry). Fixed by raising it to 45s.
+
+Re-validated live end-to-end after both fixes against the same
+`demo-litm` flagged event: full JSON returned with substantive
+when/where/how/why content, a 7-item prevention list (cross-encoder
+reranking, score thresholding, LITM-aware reordering, query rewriting,
+RAGAS/TruLens auditing, hybrid search, chunk dedup), 5 industry
+references, and `confidence: medium` with an explicit note on why (a
+single flagged call, not an observed chronic pattern). 105 ingestion
+tests pass (up from 95, ten new: 4 in `test_advisory.py`, 6 in the new
+`test_advisory_json_extraction.py`), 52 wrapper tests and 13 classifier
+tests unaffected and still pass.

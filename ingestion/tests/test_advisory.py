@@ -111,3 +111,83 @@ async def test_get_advisory_502_when_generation_fails(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await advisory_route.get_advisory("s1", 1.0, force=False)
     assert exc.value.status_code == 502
+
+
+def test_describe_litm_event_includes_risk_signal_fields():
+    event = {
+        "tool_name": "search_kb", "method": "tools/call", "latency_ms": 5.0,
+        "lost_in_middle": {
+            "risk_factors": ["large_result_set", "unranked_results"],
+            "result_count": 25, "approx_tokens": 1100, "z_size": 4.2,
+        },
+        "retrieval": {"top_score": 0.9, "avg_score": 0.5, "min_score": 0.1},
+    }
+    desc = advisory_module._describe_litm_event(event)
+    assert "large_result_set" in desc
+    assert "25" in desc
+    assert "retrieval_top_score: 0.9" in desc
+
+
+@pytest.mark.asyncio
+async def test_generate_litm_advisory_returns_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    result = await advisory_module.generate_litm_advisory({"lost_in_middle": {"risk_factors": ["size_outlier"]}})
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_advisory_dispatches_to_litm_generator_for_flagged_events(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "fake-key")
+    db = WritableFakeDB()
+    await db["events"].insert_one({
+        "server_id": "s1", "ts": 1.0, "tool_name": "search_kb",
+        "lost_in_middle": {"risk_factors": ["large_result_set"], "result_count": 20},
+    })
+    monkeypatch.setattr(advisory_route, "get_db", lambda: db)
+
+    generic_called = False
+    litm_called = False
+
+    async def fake_generic(event):
+        nonlocal generic_called
+        generic_called = True
+        return {"summary": "generic"}
+
+    async def fake_litm(event):
+        nonlocal litm_called
+        litm_called = True
+        return {"kind": "lost_in_middle", "summary": "deep dive", "prevention": ["rerank"], "industry_references": ["Liu et al. 2023"]}
+
+    monkeypatch.setattr(advisory_route, "generate_advisory", fake_generic)
+    monkeypatch.setattr(advisory_route, "generate_litm_advisory", fake_litm)
+
+    result = await advisory_route.get_advisory("s1", 1.0, force=False)
+    assert litm_called is True
+    assert generic_called is False
+    assert result["advisory"]["kind"] == "lost_in_middle"
+    assert result["advisory"]["prevention"] == ["rerank"]
+
+
+@pytest.mark.asyncio
+async def test_get_advisory_uses_generic_generator_for_non_litm_events(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "fake-key")
+    db = WritableFakeDB()
+    await db["events"].insert_one({"server_id": "s1", "ts": 1.0, "is_error": True})
+    monkeypatch.setattr(advisory_route, "get_db", lambda: db)
+
+    litm_called = False
+
+    async def fake_generic(event):
+        return {"summary": "generic"}
+
+    async def fake_litm(event):
+        nonlocal litm_called
+        litm_called = True
+        return {"summary": "should not be called"}
+
+    monkeypatch.setattr(advisory_route, "generate_advisory", fake_generic)
+    monkeypatch.setattr(advisory_route, "generate_litm_advisory", fake_litm)
+
+    result = await advisory_route.get_advisory("s1", 1.0, force=False)
+    assert litm_called is False
+    assert result["advisory"]["summary"] == "generic"

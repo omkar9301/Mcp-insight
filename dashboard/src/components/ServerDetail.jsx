@@ -8,6 +8,7 @@ import Heatmap from "./charts/Heatmap.jsx";
 import AdvisoryPanel from "./AdvisoryPanel.jsx";
 import RetrievalQualityPanel from "./RetrievalQualityPanel.jsx";
 import InjectionEventsPanel from "./InjectionEventsPanel.jsx";
+import LostInMiddlePanel from "./LostInMiddlePanel.jsx";
 
 const METRIC_HELP = {
   errorRate: "Fraction of tool/method calls that returned a JSON-RPC error object in the window.",
@@ -51,10 +52,11 @@ export default function ServerDetail() {
   const [tools, setTools] = useState(null);
   const [retrievalTools, setRetrievalTools] = useState(null);
   const [injectionEvents, setInjectionEvents] = useState(null);
+  const [litmTools, setLitmTools] = useState(null);
 
   async function load() {
     try {
-      const [h, a, e, ts, al, hm, tl, rt, ie] = await Promise.all([
+      const [h, a, e, ts, al, hm, tl, rt, ie, lm] = await Promise.all([
         ingestionApi.getHealth(serverId, 60),
         ingestionApi.getAnomalies(serverId, 15),
         ingestionApi.getEvents(serverId, { onlyFaults, limit: 50 }),
@@ -64,6 +66,7 @@ export default function ServerDetail() {
         ingestionApi.getServerTools(serverId),
         ingestionApi.getServerRetrievalTools(serverId, 1440),
         ingestionApi.getServerInjectionEvents(serverId, 50),
+        ingestionApi.getServerLostInMiddle(serverId, 1440),
       ]);
       setHealth(h);
       setAnomalies(a);
@@ -74,6 +77,7 @@ export default function ServerDetail() {
       setTools(tl.tools);
       setRetrievalTools(rt.tools);
       setInjectionEvents(ie.events);
+      setLitmTools(lm.tools);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -232,6 +236,10 @@ export default function ServerDetail() {
         <RetrievalQualityPanel rows={retrievalTools} title="Retrieval tool quality (30d)" />
       )}
 
+      {litmTools && litmTools.length > 0 && (
+        <LostInMiddlePanel rows={litmTools} title="Lost-in-the-middle risk (30d)" />
+      )}
+
       {injectionEvents && injectionEvents.length > 0 && (
         <InjectionEventsPanel events={injectionEvents} title="Prompt injection signals (security)" />
       )}
@@ -382,6 +390,10 @@ export default function ServerDetail() {
                     {ev.is_error && "error "}
                     {ev.silent_failure && "silent-failure "}
                     {ev.type === "protocol_violation" && ev.subtype}
+                    {ev.lost_in_middle && (
+                      <span style={{ color: "var(--degraded)", fontWeight: 600 }}>⚠️ lost-in-the-middle risk</span>
+                    )}
+                    {ev.prompt_injection && <span style={{ color: "var(--critical)", fontWeight: 600 }}> ⚠️ prompt injection</span>}
                   </td>
                   <td>{classificationLabel(ev.classification)}</td>
                   <td>
@@ -405,7 +417,7 @@ export default function ServerDetail() {
                     )}
                   </td>
                   <td>
-                    {ev.classification ? (
+                    {ev.classification || ev.lost_in_middle ? (
                       <AdvisoryPanel serverId={serverId} ts={ev.ts} initialAdvisory={ev.ai_advisory} />
                     ) : (
                       "—"

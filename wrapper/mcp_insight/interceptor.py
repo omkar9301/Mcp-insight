@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from .buffer import EventBuffer
 from .capture import CapturedMessage, PendingRequestTracker
+from .lost_in_middle import LostInMiddleDetector
 from .prompt_injection import PromptInjectionDetector
 from .retrieval_signals import extract_retrieval_signal
 from .schema_guard import SchemaGuard
@@ -23,6 +24,7 @@ class Interceptor:
         self.tracker = PendingRequestTracker()
         self.schema_guard = SchemaGuard()
         self.injection_detector = PromptInjectionDetector()
+        self.lost_in_middle_detector = LostInMiddleDetector()
         self._last_tools_sent: dict | None = None
         self._descriptions_scanned: set[str] = set()
 
@@ -104,6 +106,15 @@ class Interceptor:
                 injection = self.injection_detector.scan_call_result(tool_name, result)
                 if injection:
                     event["prompt_injection"] = injection
+
+                # Lost-in-the-middle risk factors (oversized/unranked
+                # context, repeated queries after a large prior result) --
+                # see lost_in_middle.py for exactly what this can and
+                # can't honestly claim to detect.
+                arguments = params.get("arguments")
+                litm = self.lost_in_middle_detector.check_call(tool_name, tool_meta.get("description"), arguments, result)
+                if litm:
+                    event["lost_in_middle"] = litm
 
         # Prompt-injection scan of the error channel (28.5) -- run
         # regardless of method, since error text is an underscanned

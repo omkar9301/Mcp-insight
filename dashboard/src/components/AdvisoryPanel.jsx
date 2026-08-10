@@ -59,7 +59,91 @@ export default function AdvisoryPanel({ serverId, ts, initialAdvisory }) {
 
           {!loading && error && <div className="error-banner">{error}</div>}
 
-          {!loading && !unconfigured && !error && advisory && (
+          {!loading && !unconfigured && !error && advisory && advisory.kind === "lost_in_middle" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <strong>⚠️ Lost in the Middle -- deep dive</strong>
+                {advisory.confidence && (
+                  <span style={{ fontSize: 11, color: CONFIDENCE_COLOR[advisory.confidence] || "var(--text-dim)" }}>
+                    confidence: {advisory.confidence}
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>Summary</div>
+                <div>{advisory.summary}</div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>When</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{advisory.when}</div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>Where (pipeline layer)</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{advisory.where}</div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>How (mechanism)</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{advisory.how}</div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>Why (root cause)</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{advisory.why}</div>
+              </div>
+
+              {advisory.prevention && advisory.prevention.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>
+                    Prevention -- industry-standard techniques
+                  </div>
+                  <ol style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
+                    {advisory.prevention.map((step, i) => (
+                      <li key={i} style={{ marginBottom: 4 }}>
+                        {step}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {advisory.industry_references && advisory.industry_references.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>References</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {advisory.industry_references.map((ref, i) => (
+                      <span key={i} style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                        · {ref}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {advisory.data_available && (
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>
+                    Grounded in (exactly what data this used)
+                  </div>
+                  <div style={{ color: "var(--text-dim)", fontSize: 12 }}>{advisory.data_available}</div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                  {advisory.generated_at ? `generated ${new Date(advisory.generated_at * 1000).toLocaleString()}` : ""}
+                </span>
+                <button style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => fetchAdvisory(true)}>
+                  Regenerate
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!loading && !unconfigured && !error && advisory && advisory.kind !== "lost_in_middle" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <strong>AI Advisory</strong>
