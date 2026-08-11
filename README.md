@@ -1034,3 +1034,58 @@ single flagged call, not an observed chronic pattern). 105 ingestion
 tests pass (up from 95, ten new: 4 in `test_advisory.py`, 6 in the new
 `test_advisory_json_extraction.py`), 52 wrapper tests and 13 classifier
 tests unaffected and still pass.
+
+### Stage 2, Phase K.2 (Lost-in-the-middle: a dedicated investigation section)
+
+Asked for the LITM feature to go from a chip-and-panel annotation to a
+full forensic section: exact input/output, the exact reasoning behind
+every flag, a live pipeline diagram, more charts, and grounded (not
+bluffed) recommendations. Before building, drew an explicit line on
+what's actually provable from this wrapper's vantage point -- it sees
+the MCP tool call and its raw result, never the downstream LLM's
+completion and never a ground-truth "correct answer" -- so every new
+feature here is either (a) real data captured and displayed as-is, (b)
+deterministic recomputation on real captured data ("counterfactual
+replay" -- not a guess at what should have happened, just the same real
+scores under a threshold/rerank/top-k cut), or (c) an explicitly labeled
+AI hypothesis. A permanent limitations note ships on the new page itself
+so this scoping isn't just a design doc, it's visible to every reader.
+
+This meant capturing more than before: `retrieval_signals.py` gained
+`extract_items_with_preview()` (per-item `{position, score, preview}`,
+preview capped at 200 chars) and `lost_in_middle.py` gained a full
+`decision_trail` (every threshold check run, fired or not, actual value
+vs. threshold -- including near-misses that never fired) plus a 200-char
+`input_preview`. This is a real privacy-posture change from every prior
+detector in this wrapper ("never the raw content, only derived
+numbers") -- deliberately scoped down before building: previews only,
+and only ever attached to calls that already tripped a risk factor, not
+every call.
+
+New ingestion endpoints: `GET /v1/litm/summary` (fleet-wide risk-factor
+breakdown, a bucketed trend, and a worst-offenders leaderboard) and
+`GET /v1/litm/tools/{server_id}/{tool_name}` (single-tool score/
+result-count distributions, repeated-query rate, and recent flagged
+calls with their full decision trail and item detail).
+
+New dashboard section at `/litm` (own nav entry): fleet overview
+(trend sparkline, risk-factor bar chart, worst-offenders leaderboard)
+drilling into a per-tool view with a score-distribution histogram, a
+result-count histogram, and a per-event deep dive -- input, a live
+pipeline diagram (`LitmPipelineDiagram.jsx`, four stages annotated from
+that event's real numbers and highlighted where the risk factors
+implicate them), the full decision trail table, a position-vs-score
+scatter plot (`ScatterChart.jsx`, with the U-shaped attention-risk zone
+overlaid), a counterfactual replay panel (`LitmCounterfactualPanel.jsx`
+-- top-k cut, score threshold cut, and rerank, computed from the same
+real scores), and the captured output items themselves.
+
+Validated live: rebuilt and re-drove the same ad-hoc 25-unranked-result
+fixture used in Phase K through the rebuilt wrapper, confirmed
+`/v1/litm/summary` and `/v1/litm/tools/demo-litm/search_kb` both return
+real aggregated data (4 flagged calls, 50 captured scores across two
+calls, full decision trail with all four checks including the ones that
+didn't fire), and confirmed the new `/litm` page's content is present in
+the rebuilt dashboard's served JS bundle. 108 ingestion tests pass (up
+from 105, three new endpoint tests), 56 wrapper tests pass (up from 52,
+four new capture tests), 13 classifier tests unaffected.

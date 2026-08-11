@@ -46,6 +46,40 @@ def find_result_list(result: Any) -> Optional[list]:
     return None
 
 
+_CONTENT_FIELD_NAMES = ("text", "content", "page_content", "document", "snippet", "body", "chunk")
+ITEM_PREVIEW_MAX_CHARS = 200
+
+
+def _extract_item_preview(item: Any) -> Optional[str]:
+    if isinstance(item, str):
+        return item[:ITEM_PREVIEW_MAX_CHARS]
+    if isinstance(item, dict):
+        for field in _CONTENT_FIELD_NAMES:
+            val = item.get(field)
+            if isinstance(val, str) and val:
+                return val[:ITEM_PREVIEW_MAX_CHARS]
+    return None
+
+
+def extract_items_with_preview(items: list) -> list[dict]:
+    """Public: per-item {position, score, preview} used only for events that
+    already tripped a LITM risk factor -- see lost_in_middle.py. Preview is
+    truncated to ITEM_PREVIEW_MAX_CHARS; this is the one place in the
+    wrapper that ever forwards a slice of raw retrieved content, and it
+    only happens for calls already flagged as risky, not every call."""
+    out = []
+    for i, item in enumerate(items):
+        score = None
+        if isinstance(item, dict):
+            for field in _SCORE_FIELD_NAMES:
+                val = item.get(field)
+                if isinstance(val, (int, float)):
+                    score = float(val)
+                    break
+        out.append({"position": i, "score": score, "preview": _extract_item_preview(item)})
+    return out
+
+
 def extract_scores(items: list) -> list[float]:
     scores: list[float] = []
     for item in items:

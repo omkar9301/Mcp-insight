@@ -133,6 +133,16 @@ export const ingestionApi = {
     request(getSettings().ingestionUrl, `/v1/stats/lost-in-middle-summary?window_minutes=${windowMinutes}`),
   getFleetLostInMiddleEvents: (limit = 50) =>
     request(getSettings().ingestionUrl, `/v1/events/lost-in-middle?limit=${limit}`),
+  getLitmDeepSummary: (windowMinutes = 43200, trendBuckets = 14) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/litm/summary?window_minutes=${windowMinutes}&trend_buckets=${trendBuckets}`
+    ),
+  getLitmToolDetail: (serverId, toolName, windowMinutes = 43200, limit = 20) =>
+    request(
+      getSettings().ingestionUrl,
+      `/v1/litm/tools/${encodeURIComponent(serverId)}/${encodeURIComponent(toolName)}?window_minutes=${windowMinutes}&limit=${limit}`
+    ),
 };
 
 export const classifierApi = {

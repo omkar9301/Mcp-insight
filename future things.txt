@@ -1,0 +1,25 @@
+1. To see what the LLM answered
+Right now: the wrapper sits between the host app and the MCP server — it only sees tool calls and tool results, not the conversation the host has with the model.
+
+What's needed: tap the model completion itself. Two realistic ways:
+
+Host-side hook: if the host app (Claude Desktop, a custom agent, etc.) can be configured to also forward the model's final response to us — a second, separate integration point, not something the MCP wrapper can get on its own.
+Proxy the LLM API calls too: sit as a transparent proxy on the api.anthropic.com (or OpenAI, etc.) traffic the same way we proxy MCP traffic, and capture completions there. This is a real, buildable second wrapper — same pattern as the MCP one — but it's a distinct component, own auth, own privacy surface, and only works if the host's LLM calls can be routed through it.
+Without one of these, the model's answer is structurally invisible to us — no amount of analysis on the MCP side changes that.
+
+2. To know the "correct" answer
+What's needed: a labeled ground truth — something outside the system has to say what the right answer was. There's no way to derive this from traffic alone. Realistic options:
+
+Human feedback loop: a thumbs-up/down or correction UI where a real person marks "the model got this wrong" — turns proven risk factors into confirmed failures over time, and builds a dataset.
+Eval harness with known test cases: run scripted queries with pre-defined expected answers against the RAG pipeline periodically (this is what RAGAS/TruLens-style tooling does) — gives ground truth for synthetic test traffic, not live production traffic.
+Live, unlabeled production traffic can never have provable ground truth without one of these external signals.
+
+3. To prove real-world harm
+This is downstream of both #1 and #2 — once you can see the actual answer (#1) and know what's correct (#2), you can compare them and say "yes, this caused a wrong answer." Without both, "harm" stays inference.
+
+A weaker, still-useful proxy that doesn't require full ground truth: user behavior signals — did the user immediately re-ask, rephrase, or express frustration right after this tool call? That's not proof of wrongness, but it's a real, observable correlate of harm, and it's something we can capture from the conversation stream if we get access to it (same requirement as #1).
+
+The honest tradeoff
+Closing these gaps means expanding scope beyond "transparent MCP wrapper" into "also observe the LLM conversation" — a real architectural addition (new proxy component and/or a feedback UI), not a tweak to what exists. It's buildable, but it changes what kind of product this is: from a pure MCP-layer observability tool to one that also taps the model layer.
+
+Do you want to scope any of this in now, or keep the LITM section to what's provable from MCP traffic alone (per the earlier plan) and treat model-layer + feedback-loop capture as a separate future initiative?

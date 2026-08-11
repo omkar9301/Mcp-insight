@@ -75,3 +75,63 @@ async def test_summary_empty_when_nothing_flagged(monkeypatch):
 
     result = await litm_module.lost_in_middle_summary(window_minutes=43200)
     assert result["total_flagged"] == 0
+
+
+def _litm_event_detailed(server_id, tool_name, risk_factors, items=None, ts=None):
+    return {
+        "server_id": server_id, "type": "rpc_call", "ts": ts or time.time(), "tool_name": tool_name,
+        "lost_in_middle": {
+            "risk_factors": risk_factors,
+            "approx_tokens": 500,
+            "result_count": len(items) if items else None,
+            "z_size": None,
+            "items": items or [],
+            "decision_trail": [{"check": "large_result_set", "fired": "large_result_set" in risk_factors, "threshold": 15, "actual": len(items) if items else None}],
+            "input_preview": '{"q": "test query"}',
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_litm_deep_summary_builds_leaderboard_and_trend(monkeypatch):
+    db = WritableFakeDB()
+    now = time.time()
+    await db["events"].insert_one(_litm_event_detailed("s1", "search", ["large_result_set"], ts=now))
+    await db["events"].insert_one(_litm_event_detailed("s1", "search", ["large_result_set", "unranked_results"], ts=now))
+    await db["events"].insert_one(_litm_event_detailed("s2", "summarize", ["size_outlier"], ts=now))
+    monkeypatch.setattr(litm_module, "get_db", lambda: db)
+
+    result = await litm_module.litm_deep_summary(window_minutes=43200, trend_buckets=7)
+    assert result["total_flagged"] == 3
+    assert result["servers_affected"] == 2
+    top = result["leaderboard"][0]
+    assert top["server_id"] == "s1"
+    assert top["tool_name"] == "search"
+    assert top["flagged_calls"] == 2
+    assert len(result["trend"]) == 7
+    assert sum(pt["flagged_calls"] for pt in result["trend"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_litm_tool_detail_returns_score_and_result_count_distributions(monkeypatch):
+    db = WritableFakeDB()
+    items = [{"position": 0, "score": 0.9, "preview": "a"}, {"position": 1, "score": 0.4, "preview": "b"}]
+    await db["events"].insert_one(_litm_event_detailed("s1", "search", ["large_result_set"], items=items))
+    monkeypatch.setattr(litm_module, "get_db", lambda: db)
+
+    result = await litm_module.litm_tool_detail("s1", "search", window_minutes=43200, limit=20)
+    assert result["flagged_calls"] == 1
+    assert result["score_distribution"] == [0.9, 0.4]
+    assert result["result_count_distribution"] == [2]
+    assert result["recent_events"][0]["lost_in_middle"]["decision_trail"][0]["check"] == "large_result_set"
+
+
+@pytest.mark.asyncio
+async def test_litm_tool_detail_404_when_no_events(monkeypatch):
+    db = WritableFakeDB()
+    monkeypatch.setattr(litm_module, "get_db", lambda: db)
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await litm_module.litm_tool_detail("ghost", "nope", window_minutes=43200, limit=20)
+    assert exc.value.status_code == 404

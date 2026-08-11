@@ -72,3 +72,41 @@ def test_flags_size_outlier_after_baseline_established():
     signal = detector.check_call("summarize", "Summarizes text", {"i": 999}, outlier_result)
     assert signal is not None
     assert "size_outlier" in signal["risk_factors"]
+
+
+def test_flagged_event_includes_full_decision_trail_with_near_misses():
+    detector = LostInMiddleDetector()
+    items = [{"text": f"chunk-{i}", "score": 0.9 - i * 0.01} for i in range(20)]
+    signal = detector.check_call("vector_search", "Searches the vector index", {"q": "x"}, {"matches": items})
+    checks = {c["check"]: c for c in signal["decision_trail"]}
+    assert checks["large_result_set"]["fired"] is True
+    assert checks["large_result_set"]["actual"] == 20
+    assert checks["large_result_set"]["threshold"] == 15
+    # scores here are descending -- ranked correctly, so this check is
+    # present in the trail as a documented non-fire, not omitted.
+    assert checks["unranked_results"]["fired"] is False
+    assert checks["repeated_query_after_large_context"]["fired"] is False
+
+
+def test_flagged_event_includes_per_item_score_position_and_preview():
+    detector = LostInMiddleDetector()
+    items = [{"text": f"chunk-{i}", "score": 0.9 - i * 0.01} for i in range(20)]
+    signal = detector.check_call("vector_search", "Searches the vector index", {"q": "x"}, {"matches": items})
+    assert len(signal["items"]) == 20
+    assert signal["items"][0] == {"position": 0, "score": 0.9, "preview": "chunk-0"}
+    assert signal["items"][5]["position"] == 5
+
+
+def test_flagged_event_includes_input_preview():
+    detector = LostInMiddleDetector()
+    items = [{"text": f"chunk-{i}", "score": 0.9 - i * 0.01} for i in range(20)]
+    signal = detector.check_call("vector_search", "Searches things", {"q": "what is lost in the middle"}, {"matches": items})
+    assert "lost in the middle" in signal["input_preview"]
+
+
+def test_unflagged_call_has_no_items_or_decision_trail_omitted():
+    # Non-flagged calls return None entirely (unchanged contract) -- no
+    # partial payload leaks out for ordinary traffic.
+    detector = LostInMiddleDetector()
+    signal = detector.check_call("add_numbers", "Adds two numbers", {"a": 1, "b": 2}, {"sum": 3})
+    assert signal is None
