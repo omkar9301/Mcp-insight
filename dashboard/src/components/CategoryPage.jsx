@@ -10,12 +10,18 @@ export default function CategoryPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    Promise.all([classifierApi.getTaxonomy(), ingestionApi.getCategoryCounts(1440 * 30)])
-      .then(([t, c]) => {
-        setTaxonomyRows(t.taxonomy.filter((row) => row.category === category));
-        setCounts(c.rows.filter((row) => row.category === category));
-      })
-      .catch((e) => setError(e.message));
+    function load() {
+      Promise.all([classifierApi.getTaxonomy(), ingestionApi.getCategoryCounts(1440 * 30)])
+        .then(([t, c]) => {
+          setTaxonomyRows(t.taxonomy.filter((row) => row.category === category));
+          setCounts(c.rows.filter((row) => row.category === category));
+          setError(null);
+        })
+        .catch((e) => setError(e.message));
+    }
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
   }, [category]);
 
   if (error) return <div className="error-banner">{error}</div>;

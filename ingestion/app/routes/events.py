@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from fastapi import APIRouter, Header
@@ -16,6 +17,8 @@ from ..models import EventBatch
 from ..rate_limit import enforce_ingest_rate_limit
 
 router = APIRouter()
+
+_log = logging.getLogger("mcp_insight.ingestion.events")
 
 _FAULT_TYPES = {"rpc_call", "protocol_violation"}
 
@@ -85,7 +88,7 @@ async def ingest_events(batch: EventBatch, authorization: str | None = Header(de
         try:
             await _process_injection_signal(batch.server_id, d, signal)
         except Exception:
-            pass
+            _log.warning("injection_signal_processing_failed", exc_info=True, extra={"extra_fields": {"server_id": batch.server_id}})
 
     # Best-effort health scoring + anomaly detection + alerting on every
     # ingest, scoped to this batch's server. Never blocks/fails the ingest
@@ -94,7 +97,7 @@ async def ingest_events(batch: EventBatch, authorization: str | None = Header(de
     try:
         await _score_and_alert(batch.server_id)
     except Exception:
-        pass
+        _log.warning("score_and_alert_failed", exc_info=True, extra={"extra_fields": {"server_id": batch.server_id}})
 
     return {"accepted": len(docs), "dropped_reported": batch.dropped_since_last_flush}
 

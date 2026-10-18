@@ -12,32 +12,48 @@ import ToolsPage from "./components/ToolsPage.jsx";
 import SecurityPage from "./components/SecurityPage.jsx";
 import LostInMiddleInsights from "./components/LostInMiddleInsights.jsx";
 
+function NavItem({ to, end, icon, children }) {
+  return (
+    <NavLink to={to} end={end} className={({ isActive }) => (isActive ? "active" : "")}>
+      <span className="nav-icon" aria-hidden="true">{icon}</span>
+      {children}
+    </NavLink>
+  );
+}
+
 export default function App() {
   return (
     <div className="app-shell">
       <div className="sidebar">
-        <h1>mcp-insight</h1>
+        <div className="brand">
+          <span className="brand-mark">◆</span>
+          <div>
+            <h1>mcp-insight</h1>
+            <div className="brand-sub">MCP observability</div>
+          </div>
+        </div>
+
+        <div className="nav-group-label">Monitor</div>
         <nav>
-          <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
-            Overview
-          </NavLink>
-          <NavLink to="/tools" className={({ isActive }) => (isActive ? "active" : "")}>
-            Tool Registry
-          </NavLink>
-          <NavLink to="/security" className={({ isActive }) => (isActive ? "active" : "")}>
-            Security
-          </NavLink>
-          <NavLink to="/litm" className={({ isActive }) => (isActive ? "active" : "")}>
-            ⚠️ Lost in the Middle
-          </NavLink>
-          <NavLink to="/taxonomy" className={({ isActive }) => (isActive ? "active" : "")}>
-            Fault Taxonomy
-          </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => (isActive ? "active" : "")}>
-            Settings
-          </NavLink>
+          <NavItem to="/" end icon="📊">Overview</NavItem>
+          <NavItem to="/tools" icon="🧰">Tool Registry</NavItem>
+          <NavItem to="/taxonomy" icon="🗂️">Fault Taxonomy</NavItem>
         </nav>
-        <ConnectivityBadge />
+
+        <div className="nav-group-label">Risk</div>
+        <nav>
+          <NavItem to="/security" icon="🛡️">Security</NavItem>
+          <NavItem to="/litm" icon="⚠️">Lost in the Middle</NavItem>
+        </nav>
+
+        <div className="nav-group-label">System</div>
+        <nav>
+          <NavItem to="/settings" icon="⚙️">Settings</NavItem>
+        </nav>
+
+        <div className="sidebar-footer">
+          <ConnectivityBadge />
+        </div>
       </div>
       <div className="main">
         <Routes>

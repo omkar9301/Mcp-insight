@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+import logging
+from typing import Optional
 
 import httpx
 
 from .config import settings
+
+_log = logging.getLogger("mcp_insight.ingestion.classifier_client")
 
 _client: httpx.AsyncClient | None = None
 
@@ -73,7 +76,11 @@ async def classify_fault(text: str) -> Optional[dict]:
             "dominant_effort": top.get("dominant_effort"),
             "low_confidence": data.get("low_confidence", False),
         }
+    except httpx.HTTPStatusError as e:
+        _log.warning("classifier_http_error", extra={"extra_fields": {"status_code": e.response.status_code}})
+        return None
     except Exception:
+        _log.warning("classifier_call_failed", exc_info=True)
         return None
 
 

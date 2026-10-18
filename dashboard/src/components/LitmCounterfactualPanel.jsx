@@ -33,43 +33,49 @@ function simulate(items) {
 export default function LitmCounterfactualPanel({ items }) {
   const sim = simulate(items || []);
   if (!sim) {
-    return <div className="empty-state">No per-item scores captured for this event -- nothing to re-simulate.</div>;
+    return <div className="empty-state">Not enough data to show a fix preview for this event.</div>;
   }
+
+  const alreadyFirst = sim.bestOriginalPosition === 0;
+  const nearStart = sim.bestOriginalPosition <= 2;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13 }}>
       <p style={{ fontSize: 11, color: "var(--text-dim)", margin: 0 }}>
-        Recalculated from this event's actual captured scores -- not a guess at the "correct" answer (this system has
-        no ground truth), just what the context would look like under standard mitigations.
+        This uses this event's real, actual results — recalculated under 3 common fixes. It's math on real numbers,
+        not a guess at what the "right" answer should have been.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
         <div className="panel" style={{ margin: 0, padding: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>As returned</div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.originalCount} items</div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>What actually happened</div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.originalCount} results sent</div>
           <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            best match at position {sim.bestOriginalPosition}
+            best match was #{sim.bestOriginalPosition + 1} in the list
           </div>
         </div>
         <div className="panel" style={{ margin: 0, padding: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>If cut to top-{TOP_K}</div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.topK.count} items</div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>avg score {sim.topK.avgScore.toFixed(2)}</div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Fix 1: show only top {TOP_K}</div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.topK.count} results</div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>avg quality score {sim.topK.avgScore.toFixed(2)} / 1.0</div>
         </div>
         <div className="panel" style={{ margin: 0, padding: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>If threshold ≥ {SCORE_THRESHOLD}</div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.thresholded.count} items</div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Fix 2: drop weak matches (below {SCORE_THRESHOLD})</div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{sim.thresholded.count} results</div>
           <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            {sim.originalCount - sim.thresholded.count} low-confidence items dropped
+            {sim.originalCount - sim.thresholded.count} low-quality results removed
           </div>
         </div>
       </div>
       <div className="panel" style={{ margin: 0, padding: 8 }}>
-        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>If reordered by score (simple rerank)</div>
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Fix 3: put the best match first (sort by quality)</div>
         <div>
-          Best match moves from position <strong>{sim.bestOriginalPosition}</strong> to position{" "}
-          <strong>{sim.bestPositionAfterRerank}</strong> — {sim.bestOriginalPosition === 0
-            ? "already first, reordering wouldn't change this."
-            : "out of the highest attention-loss zone and into the start of the context."}
+          Best match moves from position <strong>#{sim.bestOriginalPosition + 1}</strong> to{" "}
+          <strong>#1</strong> —{" "}
+          {alreadyFirst
+            ? "it was already first, so this fix wouldn't change anything here."
+            : nearStart
+            ? "it was already near the front, so this fix helps a little."
+            : "a meaningful move, out of the middle of the list and to the very front where the AI pays the most attention."}
         </div>
       </div>
     </div>

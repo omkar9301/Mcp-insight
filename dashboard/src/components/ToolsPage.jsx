@@ -19,10 +19,18 @@ export default function ToolsPage() {
   const [expanded, setExpanded] = useState({});
 
   useEffect(() => {
-    ingestionApi
-      .getAllTools()
-      .then(setData)
-      .catch((e) => setError(e.message));
+    function load() {
+      ingestionApi
+        .getAllTools()
+        .then((d) => {
+          setData(d);
+          setError(null);
+        })
+        .catch((e) => setError(e.message));
+    }
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
   }, []);
 
   if (error) return <div className="error-banner">{error}</div>;

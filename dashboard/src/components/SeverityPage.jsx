@@ -8,10 +8,18 @@ export default function SeverityPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    ingestionApi
-      .getEventsBySeverity(severity, 100)
-      .then((d) => setEvents(d.events))
-      .catch((e) => setError(e.message));
+    function load() {
+      ingestionApi
+        .getEventsBySeverity(severity, 100)
+        .then((d) => {
+          setEvents(d.events);
+          setError(null);
+        })
+        .catch((e) => setError(e.message));
+    }
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
   }, [severity]);
 
   return (

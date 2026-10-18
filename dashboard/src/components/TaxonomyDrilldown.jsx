@@ -39,6 +39,8 @@ export default function TaxonomyDrilldown() {
 
   useEffect(() => {
     load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, subcategory]);
 

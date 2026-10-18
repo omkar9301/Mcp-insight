@@ -43,14 +43,20 @@ export default function Taxonomy() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([classifierApi.getTaxonomy(), ingestionApi.getCategoryCounts(43200)])
-      .then(([t, c]) => {
-        setTaxonomy(t.taxonomy);
-        const map = {};
-        for (const row of c.rows) map[`${row.category}::${row.subcategory}`] = row.count;
-        setCounts(map);
-      })
-      .catch((e) => setError(e.message));
+    function load() {
+      Promise.all([classifierApi.getTaxonomy(), ingestionApi.getCategoryCounts(43200)])
+        .then(([t, c]) => {
+          setTaxonomy(t.taxonomy);
+          const map = {};
+          for (const row of c.rows) map[`${row.category}::${row.subcategory}`] = row.count;
+          setCounts(map);
+          setError(null);
+        })
+        .catch((e) => setError(e.message));
+    }
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
   }, []);
 
   const categories = useMemo(() => (taxonomy ? [...new Set(taxonomy.map((r) => r.category))] : []), [taxonomy]);

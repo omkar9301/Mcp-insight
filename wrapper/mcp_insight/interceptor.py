@@ -9,6 +9,9 @@ actual observability logic.
 """
 from __future__ import annotations
 
+import sys
+import traceback
+
 from .buffer import EventBuffer
 from .capture import CapturedMessage, PendingRequestTracker
 from .lost_in_middle import LostInMiddleDetector
@@ -29,6 +32,21 @@ class Interceptor:
         self._descriptions_scanned: set[str] = set()
 
     def handle_message(self, msg: CapturedMessage) -> None:
+        """Public entry point -- deliberately fail-open. This wrapper's one
+        job is to relay traffic between a real MCP client and a real MCP
+        server without either side noticing; an exception anywhere in the
+        observability pipeline (a detector bug, a malformed schema the
+        wrapped server itself declared, anything) must never be allowed to
+        propagate into the fire-and-forget pump tasks in cli.py/proxy.py --
+        that would silently kill the relay and break the user's actual MCP
+        session over a bug that has nothing to do with moving bytes."""
+        try:
+            self._handle_message(msg)
+        except Exception:
+            print("mcp-insight: observability error (traffic still relayed normally):", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def _handle_message(self, msg: CapturedMessage) -> None:
         if msg.parsed is None:
             # Non-JSON stdout/body noise from the server is itself a real,
             # taxonomy-recognized fault (transport contamination).

@@ -24,6 +24,52 @@ class FakeCursor:
             raise StopAsyncIteration
 
 
+class AggregateCursor:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def __aiter__(self):
+        self._iter = iter(self._rows)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def _run_match_group_pipeline(docs: list[dict], pipeline: list[dict]) -> "AggregateCursor":
+    """Supports exactly the `[$match, $group]` shape used by
+    events_by_classification -- not a general aggregation engine, just
+    enough to exercise that one real query pattern in tests without a
+    live MongoDB."""
+    rows = docs
+    for stage in pipeline:
+        if "$match" in stage:
+            rows = [d for d in rows if _matches(d, stage["$match"])]
+        elif "$group" in stage:
+            spec = stage["$group"]
+            id_field = spec["_id"].lstrip("$")
+            groups: dict = {}
+            for d in rows:
+                key = _get_path(d, id_field)
+                g = groups.setdefault(key, {"_id": key})
+                for out_field, accum in spec.items():
+                    if out_field == "_id":
+                        continue
+                    op, field_ref = next(iter(accum.items()))
+                    val = 1 if field_ref == 1 else _get_path(d, field_ref.lstrip("$"))
+                    if op == "$sum":
+                        g[out_field] = g.get(out_field, 0) + val
+                    elif op == "$min":
+                        g[out_field] = val if out_field not in g else min(g[out_field], val)
+                    elif op == "$max":
+                        g[out_field] = val if out_field not in g else max(g[out_field], val)
+            rows = list(groups.values())
+    return AggregateCursor(rows)
+
+
 class FakeCollection:
     def __init__(self, docs: list[dict]) -> None:
         self._docs = docs
@@ -31,6 +77,9 @@ class FakeCollection:
     def find(self, query: dict, *_args, **_kwargs) -> FakeCursor:
         matched = [d for d in self._docs if _matches(d, query)]
         return FakeCursor(matched)
+
+    def aggregate(self, pipeline: list[dict]) -> "AggregateCursor":
+        return _run_match_group_pipeline(self._docs, pipeline)
 
 
 class WritableCollection:
@@ -43,6 +92,9 @@ class WritableCollection:
 
     def find(self, query: dict, *_args, **_kwargs) -> FakeCursor:
         return FakeCursor([d for d in self._docs if _matches(d, query)])
+
+    def aggregate(self, pipeline: list[dict]) -> "AggregateCursor":
+        return _run_match_group_pipeline(self._docs, pipeline)
 
     async def find_one(self, query: dict) -> dict | None:
         for d in self._docs:

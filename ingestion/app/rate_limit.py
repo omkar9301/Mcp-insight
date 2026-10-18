@@ -24,14 +24,34 @@ from fastapi import HTTPException, Request
 from .config import settings
 
 
+_SWEEP_INTERVAL_S = 300.0  # how often a stale-key sweep runs, amortized into normal check() calls
+
+
 class SlidingWindowLimiter:
+    """Every distinct key (server_id or client IP) gets its own deque that
+    is never removed on its own -- a deployment that sees many distinct,
+    short-lived keys over a long uptime (e.g. varied client IPs) would
+    otherwise accumulate dict entries indefinitely. A periodic sweep drops
+    any key whose window has fully expired, amortized into normal
+    request handling rather than a separate background task."""
+
     def __init__(self, max_requests: int, window_s: float) -> None:
         self.max_requests = max_requests
         self.window_s = window_s
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._last_swept = time.time()
+
+    def _sweep_stale_keys(self, now: float) -> None:
+        if now - self._last_swept < _SWEEP_INTERVAL_S:
+            return
+        self._last_swept = now
+        stale = [k for k, hits in self._hits.items() if not hits or now - hits[-1] > self.window_s]
+        for k in stale:
+            del self._hits[k]
 
     def check(self, key: str) -> bool:
         now = time.time()
+        self._sweep_stale_keys(now)
         hits = self._hits[key]
         while hits and now - hits[0] > self.window_s:
             hits.popleft()

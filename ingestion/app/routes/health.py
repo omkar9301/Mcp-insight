@@ -193,11 +193,22 @@ async def events_by_classification(
     db = get_db()
     query = {"classification.category": category, "classification.subcategory": subcategory}
 
-    all_matching = [doc async for doc in db["events"].find(query, {"_id": 0, "server_id": 1, "ts": 1})]
+    # Aggregate stats computed server-side via $group instead of pulling
+    # every matching event into Python -- this endpoint is polled
+    # automatically by the dashboard's taxonomy drill-down page every 20s,
+    # so on a busy category with a large 30-day match count, transferring
+    # and iterating every doc in Python on every poll is real, avoidable load.
+    per_server_pipeline = [
+        {"$match": query},
+        {"$group": {"_id": "$server_id", "count": {"$sum": 1}, "min_ts": {"$min": "$ts"}, "max_ts": {"$max": "$ts"}}},
+    ]
     per_server: dict[str, int] = {}
-    for doc in all_matching:
-        per_server[doc["server_id"]] = per_server.get(doc["server_id"], 0) + 1
-    timestamps = [doc["ts"] for doc in all_matching]
+    first_seen: float | None = None
+    last_seen: float | None = None
+    async for row in db["events"].aggregate(per_server_pipeline):
+        per_server[row["_id"]] = row["count"]
+        first_seen = row["min_ts"] if first_seen is None else min(first_seen, row["min_ts"])
+        last_seen = row["max_ts"] if last_seen is None else max(last_seen, row["max_ts"])
 
     cursor = db["events"].find(query, {"_id": 0}).sort("ts", -1).limit(limit)
     events = [doc async for doc in cursor]
@@ -206,9 +217,9 @@ async def events_by_classification(
         "category": category,
         "subcategory": subcategory,
         "events": events,
-        "total_count": len(all_matching),
+        "total_count": sum(per_server.values()),
         "distinct_servers": len(per_server),
         "per_server_counts": per_server,
-        "first_seen": min(timestamps) if timestamps else None,
-        "last_seen": max(timestamps) if timestamps else None,
+        "first_seen": first_seen,
+        "last_seen": last_seen,
     }

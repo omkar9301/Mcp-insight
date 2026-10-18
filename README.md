@@ -1089,3 +1089,155 @@ didn't fire), and confirmed the new `/litm` page's content is present in
 the rebuilt dashboard's served JS bundle. 108 ingestion tests pass (up
 from 105, three new endpoint tests), 56 wrapper tests pass (up from 52,
 four new capture tests), 13 classifier tests unaffected.
+
+### Stage 2, Phase K.3 (UX audit trail: fixed findings, plain-language rewrite, visual redesign)
+
+Three follow-on rounds against the Phase K.2 work, each triggered by a
+concrete complaint rather than a self-review:
+
+**Audit-driven fixes.** Ran a full pass over the LITM feature (and a
+couple of app-wide gaps it exposed) looking for broken fields, dead
+links, and stale code -- not a style review, a correctness one. Found
+and fixed: a CSS variable (`--panel-bg`) that didn't exist anywhere in
+`index.css`, silently falling back to transparent; a histogram footer
+bug rendering nonsensical duplicated ranges ("25–25 items"); the
+per-server/fleet LITM tables had no link at all into the new `/litm`
+deep-dive page; and the AI advisory's `_describe_litm_event()` never
+used the decision-trail/item data just built for it, so the "maximally
+detailed" report was still working from old summary stats only -- fixed
+by feeding it the full trail (including near-misses) and a sample of
+captured items.
+
+**Charts had to explain themselves.** Feedback: a chart that needs a
+paragraph next to it to be read has failed at being a chart. Rewrote
+`ScatterChart.jsx` and `Histogram.jsx` to carry their own title, axis
+tick labels, and legend drawn on the chart itself -- no more bare bars
+or unlabeled dot clouds relying on external captions. Fixed a
+follow-on bug this introduced (the in-chart legend overlapping the
+title text) and a related one in `Histogram.jsx` (count labels on
+full-height bars colliding with the subtitle row) by giving both
+components dedicated vertical space per element instead of packing
+everything into the same few pixels.
+
+**Plain-language rewrite.** Fed back that the section was unreadable to
+a fresher/non-technical reader. Rewrote every label and explanation
+across the LITM section to a consistent "what happened / why it
+matters / what to do" structure -- e.g. `unranked_results` now reads
+"Best answer wasn't listed first" everywhere instead of the raw
+detector code, section headers became the actual questions a reader
+would ask ("Is this getting more common over time?"), and the
+decision-trail table shows "⚠️ Yes, triggered" / "✓ No, fine" instead
+of "fired"/"no".
+
+**Full visual redesign.** The whole app (not just LITM) got a fresh
+palette (deep indigo-navy background, indigo→cyan gradient accent,
+richer status colors), real elevation (shadows, larger radii) instead
+of flat identical boxes, more spacing, zebra-striped/hoverable tables,
+real button/input/focus states, and a reorganized sidebar (grouped
+sections, icons, a brand mark) -- global changes in `index.css` and
+`App.jsx`, so every page benefits, not only the newest one.
+
+Each round was rebuilt (`vite build`), redeployed to the running
+Docker stack, and spot-checked live (200s on every route, new copy/CSS
+confirmed present in the served bundle) before moving to the next.
+
+### Stage 2, Phase L (frontend test suite, auto-refresh everywhere, backend technical audit)
+
+Three requests bundled into one pass: fix remaining technical issues
+across the whole system, and add the two most-needed missing features
+(a real frontend test suite, and live auto-refresh on pages that only
+ever fetched once).
+
+**Frontend test suite** -- this project had zero JS tests. Added
+Vitest + React Testing Library (`vite.config.js`, `src/test/setup.js`,
+`npm test`), then wrote 21 tests covering the pure logic most likely to
+silently regress: `utils.js` (`formatRelativeTime`/`statusRank`),
+`Histogram`/`ScatterChart` (empty states, NaN/missing-field filtering,
+axis labeling), `LitmCounterfactualPanel` (the actual top-k/threshold/
+rerank math, including the "already first" vs. "meaningful move"
+branching), and `LostInMiddlePanel` (every `RISK_INFO` entry has a
+complete what/why/do explanation, and the tool-name link resolves to
+the right `/litm?server=&tool=` URL). Adding `ScatterChart`'s test
+surfaced that its legend and data-point circles were indistinguishable
+in the DOM -- gave data points a `scatter-dot` class so tests (and any
+future styling) can target them precisely.
+
+**Auto-refresh everywhere** -- `SecurityPage` and the server list/detail
+pages already polled; `CategoryPage`, `SeverityPage`, `Taxonomy`,
+`TaxonomyDrilldown`, `ToolsPage`, and both views inside
+`LostInMiddleInsights` (fleet summary and tool drill-down) fetched once
+and never updated. Added the same `load()` + `setInterval` + cleanup
+pattern to all of them (20-30s depending on page). One real bug caught
+while doing this: naively adding the same pattern to the LITM tool
+drill-down would have reset the reader's manually-selected incident
+back to the newest one on every 20s refresh tick -- fixed by only
+defaulting the selection on the *first* load, not every poll.
+
+**Backend technical audit** -- ran a dedicated audit of `wrapper/`,
+`ingestion/`, and `classifier/` for real bugs (not style), then fixed
+what it found:
+
+- **[high]** `Interceptor.handle_message()` had no exception boundary.
+  Any bug in a detector (schema validation, injection scan, LITM check)
+  would propagate out of the fire-and-forget pump tasks in `cli.py`/
+  `proxy.py` and silently kill the relay -- breaking the user's *real*
+  MCP session over a bug in observability code that has nothing to do
+  with moving bytes. Worse, in `cli.py`'s `_pump_stdin`, `handle_message`
+  runs *before* the message is forwarded, so an uncaught exception there
+  would drop the client's message entirely. Fixed by wrapping the whole
+  detector pipeline in a single try/except inside `handle_message` itself
+  (fail-open, matching this wrapper's existing philosophy everywhere
+  else) -- one fix point protects every call site. Added a regression
+  test that patches a detector to raise and asserts `handle_message`
+  still doesn't propagate.
+- **[medium]** `routes/keys.py` (mint/revoke API keys) was missing the
+  rate-limit dependency every other router has -- fixed.
+- **[medium]** No indexes existed for the `retrieval` and
+  `classification_feedback` sparse fields despite being queried with
+  `$exists` filters -- both are scanned on every retrieval-quality and
+  feedback-accuracy request. Added.
+- **[medium]** `events_by_classification` (the taxonomy drill-down's
+  backing endpoint -- now polled automatically every 20s per Phase L's
+  auto-refresh work, raising the stakes on this one) ran a second, fully
+  unbounded query over the whole matching set purely to compute
+  aggregate stats in Python. Replaced with a `$match`/`$group`
+  aggregation pipeline computed server-side in MongoDB. Required adding
+  minimal `$match`+`$group` support to the test suite's in-memory fake
+  DB (`tests/conftest.py`) to keep it testable without a live Mongo.
+- **[medium]** Two ingest-path failure branches (`_process_injection_signal`,
+  `_score_and_alert` in `routes/events.py`) swallowed exceptions with a
+  bare `except Exception: pass` and no logging -- a real bug in either
+  path would never surface anywhere. Added structured warning logs,
+  matching the pattern already used by `alerting.py`/`advisory.py`.
+- **[low]** `classifier_client.py`'s classifier-call failure path had the
+  same silent-swallow issue (plus a leftover unused `Any` import) --
+  fixed the same way.
+- **[low]** Both in-memory rate limiters (`ingestion/app/rate_limit.py`
+  and `classifier/app/main.py`) kept one deque per distinct key
+  (server_id or client IP) forever, even after it emptied out -- a slow
+  memory leak on long-uptime deployments with many distinct callers.
+  Added a periodic sweep (every 5 minutes, amortized into normal request
+  handling) that drops fully-expired keys.
+
+Not fixed, flagged as follow-up: the audit found several more
+`.find()` loops across `stats.py`/`anomaly.py`/`injection.py`/
+`lost_in_middle.py`/`retrieval.py`/`feedback.py` that pull a full
+time-windowed result set into Python rather than aggregating in Mongo.
+These are bounded by the existing `window_minutes` query cap (max 30
+days) and less exposed than `events_by_classification` was, but the
+same class of fix would apply if they become a real bottleneck under
+load.
+
+Validated live: rebuilt and redeployed ingestion, classifier, and
+dashboard containers together; confirmed the new keys-route rate limit
+returns 401 (not a 500) for an unauthenticated request, confirmed
+`/v1/events/by-classification` returns correct real aggregated data
+(53 matches across 8 servers on the live `Tool Result Propagation`
+subcategory) via the new aggregation pipeline, and spot-checked all six
+dashboard routes still return 200 after the container rebuild. All 109
+ingestion tests still pass (the `events_by_classification` rewrite and
+new indexes are covered by its existing tests, extended with
+`$match`/`$group` support in the fake DB rather than a new test file),
+57 wrapper tests pass (up from 56, one new crash-boundary regression
+test), 13 classifier tests unaffected, and 21 new frontend tests pass
+(0 before this phase).

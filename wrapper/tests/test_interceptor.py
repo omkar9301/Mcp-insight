@@ -1,5 +1,18 @@
+from unittest.mock import patch
+
 from mcp_insight.capture import parse_line
 from mcp_insight.interceptor import Interceptor
+
+
+def test_handle_message_never_raises_even_if_a_detector_is_broken():
+    # A transparent wrapper's one job is to keep relaying traffic -- a bug
+    # anywhere in the observability pipeline must never propagate out of
+    # handle_message and kill the pump task relaying the real MCP session.
+    interceptor = Interceptor(server_id="s1", ingestion_url="http://unreachable.invalid", api_key="")
+    with patch.object(interceptor.schema_guard, "check_tool_result", side_effect=RuntimeError("boom")):
+        _feed(interceptor, "client_to_server", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x", "arguments": {}}})
+        # must not raise:
+        _feed(interceptor, "server_to_client", {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
 
 
 def _feed(interceptor, direction, raw_dict):

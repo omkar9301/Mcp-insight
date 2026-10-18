@@ -163,6 +163,31 @@ def _describe_litm_event(event: dict) -> str:
         f"approx_tokens_in_result: {signal.get('approx_tokens')}",
         f"size_zscore_vs_this_tools_own_history: {signal.get('z_size')}",
     ]
+    if signal.get("input_preview"):
+        lines.append(f"input_preview: {signal['input_preview']}")
+
+    # Full rule trace, not just the fired labels -- includes checks that
+    # did NOT fire, so the model can reason about near-misses too (e.g. a
+    # size check just under threshold) instead of only the binary flags.
+    trail = signal.get("decision_trail") or []
+    if trail:
+        lines.append("decision_trail (every check run, fired or not):")
+        for check in trail:
+            lines.append(
+                f"  - {check.get('check')}: fired={check.get('fired')}, "
+                f"threshold={check.get('threshold')}, actual={check.get('actual')}"
+            )
+
+    # A sample of the actual captured items (position + score + preview)
+    # -- this is what makes the position-vs-score reasoning in the prompt
+    # below groundable in real data rather than only the summary stats.
+    items = signal.get("items") or []
+    if items:
+        lines.append(f"captured_items (position, score, content preview -- {len(items)} total, showing first 10):")
+        for item in items[:10]:
+            preview = (item.get("preview") or "")[:80]
+            lines.append(f"  - position {item.get('position')}, score {item.get('score')}: \"{preview}\"")
+
     retrieval = event.get("retrieval")
     if retrieval:
         lines.append(f"retrieval_top_score: {retrieval.get('top_score')}")

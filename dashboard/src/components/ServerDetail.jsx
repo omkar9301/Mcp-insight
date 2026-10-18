@@ -237,7 +237,7 @@ export default function ServerDetail() {
       )}
 
       {litmTools && litmTools.length > 0 && (
-        <LostInMiddlePanel rows={litmTools} title="Lost-in-the-middle risk (30d)" />
+        <LostInMiddlePanel rows={litmTools} serverId={serverId} title="Lost-in-the-middle risk (30d)" />
       )}
 
       {injectionEvents && injectionEvents.length > 0 && (

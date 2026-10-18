@@ -50,13 +50,27 @@ async def require_api_key(authorization: str | None = Header(default=None)) -> N
 
 _RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_CLASSIFY_PER_MINUTE", "300"))
 _hits: dict[str, deque] = defaultdict(deque)
+_RATE_LIMIT_WINDOW_S = 60.0
+_SWEEP_INTERVAL_S = 300.0
+_last_swept = time.time()
 
 
 async def enforce_rate_limit(request: Request) -> None:
+    global _last_swept
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
+
+    # A distinct-client-IP dict entry is never removed on its own -- sweep
+    # out fully-expired keys periodically so long-uptime deployments don't
+    # accumulate one deque per IP ever seen, forever.
+    if now - _last_swept >= _SWEEP_INTERVAL_S:
+        _last_swept = now
+        stale = [k for k, hits in _hits.items() if not hits or now - hits[-1] > _RATE_LIMIT_WINDOW_S]
+        for k in stale:
+            del _hits[k]
+
     hits = _hits[client_ip]
-    while hits and now - hits[0] > 60.0:
+    while hits and now - hits[0] > _RATE_LIMIT_WINDOW_S:
         hits.popleft()
     if len(hits) >= _RATE_LIMIT_PER_MINUTE:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded ({_RATE_LIMIT_PER_MINUTE}/min)")

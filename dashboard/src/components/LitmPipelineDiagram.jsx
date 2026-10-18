@@ -10,27 +10,27 @@ import React from "react";
 const STAGES = [
   {
     key: "query",
-    label: "Query formulation",
+    label: "1. AI asks a question",
     implicatedBy: ["repeated_query_after_large_context"],
-    describe: (d) => (d.repeated ? "Re-query detected: same arguments issued again shortly after a large prior result." : "Single query, no repeat pattern detected."),
+    describe: (d) => (d.repeated ? "⚠️ The AI asked the exact same question again, right after a big answer — a sign the first answer didn't help." : "Normal — no repeated questions."),
   },
   {
     key: "retrieval",
-    label: "Retrieval / ranking",
+    label: "2. Tool searches and ranks results",
     implicatedBy: ["unranked_results", "large_result_set"],
-    describe: (d) => `${d.resultCount ?? "?"} results returned${d.unranked ? ", not sorted by relevance" : ", sorted by relevance"}.`,
+    describe: (d) => `${d.resultCount ?? "?"} results came back${d.unranked ? ", and they weren't sorted by how good a match they were." : ", sorted best-first."}`,
   },
   {
     key: "assembly",
-    label: "Context assembly",
+    label: "3. Results get bundled together",
     implicatedBy: ["size_outlier", "large_result_set"],
-    describe: (d) => `~${d.approxTokens ?? "?"} tokens assembled into context${d.sizeOutlier ? " — statistical outlier vs. this tool's own history" : ""}.`,
+    describe: (d) => `About ${d.approxTokens ?? "?"} tokens (words) bundled up to hand to the AI${d.sizeOutlier ? " — much bigger than usual for this tool." : "."}`,
   },
   {
     key: "prompt",
-    label: "Prompt construction",
+    label: "4. AI reads it and responds",
     implicatedBy: [],
-    describe: () => "Context handed to the model — outside this system's visibility (see limitations).",
+    describe: () => "We can't see this step — we don't have access to what the AI actually says back to the user.",
   },
 ];
 
@@ -54,7 +54,7 @@ export default function LitmPipelineDiagram({ signal }) {
               style={{
                 minWidth: 150,
                 border: `1px solid ${implicated ? "var(--degraded)" : "var(--border)"}`,
-                background: implicated ? "rgba(210, 153, 34, 0.1)" : "var(--panel-bg, transparent)",
+                background: implicated ? "rgba(210, 153, 34, 0.1)" : "var(--bg-panel)",
                 borderRadius: 6,
                 padding: 10,
                 fontSize: 12,

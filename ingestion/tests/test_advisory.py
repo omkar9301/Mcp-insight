@@ -128,6 +128,27 @@ def test_describe_litm_event_includes_risk_signal_fields():
     assert "retrieval_top_score: 0.9" in desc
 
 
+def test_describe_litm_event_includes_decision_trail_and_items():
+    event = {
+        "tool_name": "search_kb", "method": "tools/call", "latency_ms": 5.0,
+        "lost_in_middle": {
+            "risk_factors": ["large_result_set"],
+            "result_count": 20, "approx_tokens": 1100, "z_size": 4.2,
+            "input_preview": '{"q": "test"}',
+            "decision_trail": [
+                {"check": "unranked_results", "fired": False, "threshold": "sorted descending", "actual": None},
+                {"check": "large_result_set", "fired": True, "threshold": 15, "actual": 20},
+            ],
+            "items": [{"position": 0, "score": 0.9, "preview": "chunk-0"}],
+        },
+    }
+    desc = advisory_module._describe_litm_event(event)
+    assert "unranked_results: fired=False" in desc
+    assert "large_result_set: fired=True" in desc
+    assert 'position 0, score 0.9: "chunk-0"' in desc
+    assert "input_preview:" in desc
+
+
 @pytest.mark.asyncio
 async def test_generate_litm_advisory_returns_none_when_disabled(monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", "")

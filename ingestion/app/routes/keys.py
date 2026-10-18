@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends
 
 from ..auth import require_api_key
 from ..keys import revoke_server_key, set_server_key
+from ..rate_limit import enforce_read_rate_limit
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_api_key), Depends(enforce_read_rate_limit)])
 
 
 @router.post("/v1/servers/{server_id}/keys")
